@@ -16,6 +16,14 @@
 En ejecuciones posteriores los ajustes se cargan desde Google Drive. El botón **Guardar preferencias** permite actualizarlos sin iniciar una instalación.
 
 
+## Corrección AUTOMATIC1111 para Colab Python 3.13 (octubre 2026)
+
+AUTOMATIC1111 1.10.1 puede fallar durante su arranque porque intenta clonar `Stability-AI/stablediffusion.git`, un repositorio que ya no está disponible públicamente. El lanzador fija automáticamente `STABLE_DIFFUSION_REPO=https://github.com/w-e-w/stablediffusion.git`, el reemplazo recomendado por los mantenedores. No necesitas modificar A1111 a mano ni añadir un token de GitHub.
+
+Además, Colab puede utilizar Python 3.13, mientras que A1111 depende de paquetes antiguos compatibles con Python 3.10. Al elegir AUTOMATIC1111, el proyecto instala y reutiliza **un entorno aislado Python 3.10 gestionado con uv** en `/content/AnimeColabStudio/a1111-venv/`. La versión de Python del notebook y ComfyUI no se modifica. El entorno aislado vuelve a crearse tras un reinicio de Colab; los checkpoints y resultados guardados en Drive se conservan.
+
+Esta solución incluye una prueba de regresión que revisa el ejecutable Python utilizado, la URL del clon y las variables de entorno. Esa prueba de CI **no sustituye una ejecución completa de inferencia en GPU**.
+
 ## Si Colab se queda en «Preparando»
 
 **La marca verde de la celda 2 es normal**: el dashboard termina de dibujarse y la instalación sigue en otro proceso. Si no ves cambios, ejecuta la **celda 3: Diagnóstico**, que muestra estado, PID y registros directamente, sin depender de las actualizaciones del widget.
