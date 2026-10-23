@@ -159,26 +159,43 @@ def launch_worker(config: dict, secrets: dict[str, str]) -> int:
 def snapshot() -> dict:
     data = read_json(STATUS)
     pids = read_json(PIDS)
-    stage_name = data.get("stage", "idle")
-    if stage_name not in {"ready", "error", "stopped"} and not process_active():
-        if pids:
-            data.update(stage="error", message="El proceso terminó inesperadamente. Consulta el registro.", percent=0)
+    name = data.get("stage", "idle")
+    if name == "ready":
+        pid = pids.get("server")
+        if not isinstance(pid, int) or not pid_alive(pid, markers=("main.py", "launch.py", "webui.py")):
+            data.update(stage="error", message="El servidor terminó. Revisa los logs y pulsa Iniciar para reintentarlo.", percent=0)
             atomic_json(STATUS, data)
+    elif name not in {"error", "stopped"} and not process_active() and pids:
+        data.update(stage="error", message="El proceso terminó inesperadamente. Consulta el registro.", percent=0)
+        atomic_json(STATUS, data)
     return data
 
 
-def recent_log(lines: int = 40) -> str:
-    if not LOG.exists():
-        return "(Sin registros todavía)"
+def _tail_file(path: Path, limit: int = 40000, lines: int = 25) -> str:
+    if not path.exists():
+        return ""
     try:
-        # Only seek the last 64 KiB to avoid reading multi-GB install logs.
-        with LOG.open("rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - 65536))
-            blob = f.read().decode("utf-8", errors="replace")
+        with path.open("rb") as stream:
+            stream.seek(0, 2)
+            stream.seek(max(0, stream.tell() - limit))
+            blob = stream.read().decode("utf-8", errors="replace")
         return "\n".join(blob.splitlines()[-lines:])
     except OSError:
-        return "(El registro no está disponible)"
+        return ""
+
+
+def recent_log(lines: int = 45) -> str:
+    """Show installation progress AND logs from the separate UI/tunnel processes."""
+    main = _tail_file(LOG, lines=lines)
+    extras = []
+    for name in ("comfyui-server.log", "automatic1111-server.log", "tunnel.log"):
+        location = RUNTIME / name
+        if not location.exists():
+            continue
+        data = _tail_file(location, limit=18000, lines=16)
+        if data:
+            extras.append(f"\n--- {name} ---\n{data}")
+    return (main or "(Sin registros todavía)") + "".join(extras)
 
 
 def render_log(lines=40) -> str:
