@@ -98,6 +98,47 @@ def save_settings(config: dict) -> None:
 def run(command, *, cwd=None, env=None) -> None:
     subprocess.run(command, cwd=cwd, env=env, check=True)
 
+A1111_STABLE_DIFFUSION_MIRROR = "https://github.com/w-e-w/stablediffusion.git"
+A1111_PYTHON_DIR = LOCAL_ROOT / "a1111-venv"
+
+
+def ensure_a1111_python() -> Path:
+    """Install Python 3.10 privately for legacy AUTOMATIC1111 on Colab 3.13.
+
+    The notebook and ComfyUI retain Colab's own Python interpreter. Never
+    replace the system interpreter or install A1111 packages into it.
+    """
+    interpreter = A1111_PYTHON_DIR / "bin" / "python"
+    if interpreter.exists():
+        test = subprocess.run([str(interpreter), "-c",
+                               "import sys, pip; assert sys.version_info[:2] == (3, 10)"],
+                              capture_output=True, text=True)
+        if test.returncode == 0:
+            print("AUTOMATIC1111: reutilizando Python 3.10 aislado: " + str(interpreter), flush=True)
+            return interpreter
+        print("AUTOMATIC1111: entorno Python incompleto, reconstruyendo.", flush=True)
+        shutil.rmtree(A1111_PYTHON_DIR, ignore_errors=True)
+
+    uv = shutil.which("uv")
+    if not uv:
+        print("AUTOMATIC1111: instalando gestor uv...", flush=True)
+        run([sys.executable, "-m", "pip", "install", "-q", "uv"])
+        uv = shutil.which("uv")
+    if not uv:
+        raise RuntimeError("No fue posible instalar uv para preparar Python 3.10.")
+
+    print("AUTOMATIC1111: creando Python 3.10 aislado (Colab puede seguir en 3.13)...", flush=True)
+    A1111_PYTHON_DIR.parent.mkdir(parents=True, exist_ok=True)
+    run([uv, "venv", "--seed", "--python", "3.10", "--managed-python", str(A1111_PYTHON_DIR)])
+    test = subprocess.run([str(interpreter), "-c",
+                           "import sys, pip; assert sys.version_info[:2] == (3, 10); print(sys.version)"],
+                          capture_output=True, text=True)
+    if test.returncode != 0:
+        raise RuntimeError("Python 3.10 no quedó listo: " + (test.stderr or test.stdout))
+    print("AUTOMATIC1111: Python listo: " + test.stdout.strip(), flush=True)
+    return interpreter
+
+
 def install_ui(ui_name: str) -> Path:
     if ui_name == "ComfyUI":
         path = ROOT / "ComfyUI"
@@ -108,6 +149,7 @@ def install_ui(ui_name: str) -> Path:
             run(["git", "clone", "--depth", "1", "https://github.com/Comfy-Org/ComfyUI.git", str(path)])
         run([sys.executable, "-m", "pip", "install", "-q", "-r", str(path / "requirements.txt")])
     else:
+        ensure_a1111_python()
         path = ROOT / "stable-diffusion-webui"
         if not (path / "launch.py").exists():
             if path.exists():
@@ -337,13 +379,24 @@ def launch_ui(app: Path, config: dict, output_root: Path) -> tuple[int, Path]:
     else:
         write_a1111_settings(app, output_root, config["profile"])
         ckpt = model_dir(app, ui_name) / MODELS[config["model"]][1]
-        args = [sys.executable, "launch.py", "--listen", "--port", str(port), "--skip-python-version-check", "--skip-torch-cuda-test", "--no-download-sd-model", "--ckpt", str(ckpt)]
+        interpreter = ensure_a1111_python()
+        args = [str(interpreter), "launch.py", "--port", str(port), "--no-download-sd-model", "--ckpt", str(ckpt)]
         password = secret("WEBUI_PASSWORD")
         if password:
             args += ["--gradio-auth", f"studio:{password}"]
     env = os.environ.copy()
     if ui_name != "ComfyUI":
-        env["VENV_DIR"] = "-"
+        env["VENV_DIR"] = "-"  # Already using isolated Python 3.10 venv.
+        env["VIRTUAL_ENV"] = str(A1111_PYTHON_DIR)
+        env["PATH"] = str(A1111_PYTHON_DIR / "bin") + os.pathsep + env.get("PATH", "")
+        env["PYTHONNOUSERSITE"] = "1"
+        # AUTOMATIC1111 1.10.1 still references an unavailable upstream repo.
+        # Use the mirror explicitly recommended by its maintainers.
+        env["STABLE_DIFFUSION_REPO"] = A1111_STABLE_DIFFUSION_MIRROR
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+        print("AUTOMATIC1111: origen Stable Diffusion: " + env["STABLE_DIFFUSION_REPO"], flush=True)
+        print("AUTOMATIC1111: intérprete aislado: " + str(args[0]), flush=True)
     with logfile.open("ab") as stream:
         proc = subprocess.Popen(args, cwd=str(app), env=env, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
     STATE["ui_process"] = proc
