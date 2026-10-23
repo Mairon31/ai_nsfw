@@ -12,12 +12,9 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
-import ipywidgets as widgets
-from IPython.display import display
-from huggingface_hub import hf_hub_download
 import requests
-
-from google.colab import drive, userdata
+# Deliberately lazy-load Colab/IPython/Hugging Face modules.
+# Importing notebook modules inside a detached worker can block at startup.
 
 VERSION = "1.0.0"
 ROOT = Path("/content")
@@ -61,6 +58,7 @@ def secret(name: str) -> str:
     if value:
         return value
     try:
+        from google.colab import userdata
         return (userdata.get(name) or "").strip()
     except Exception:
         return ""
@@ -73,6 +71,7 @@ def check_gpu() -> None:
 
 def mount_drive() -> None:
     if not (DRIVE_MOUNT / "MyDrive").exists():
+        from google.colab import drive
         drive.mount(str(DRIVE_MOUNT))
     DRIVE_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -131,6 +130,7 @@ def safe_link(source: Path, destination: Path) -> None:
     destination.symlink_to(source)
 
 def download_hf(repo: str, filename: str, folder: Path, token: str | None = None) -> Path:
+    from huggingface_hub import hf_hub_download
     folder.mkdir(parents=True, exist_ok=True)
     file = folder / Path(filename).name
     if file.exists() and file.stat().st_size > 1024 * 1024:
@@ -163,6 +163,7 @@ def parse_custom_lora(line: str) -> tuple[str, str]:
     return "url", line
 
 def download_custom_lora(line: str, folder: Path) -> Path:
+    from huggingface_hub import hf_hub_download
     kind, value = parse_custom_lora(line)
     if kind == "hf":
         repo, filename, *revision = value.split("|")
@@ -467,6 +468,8 @@ def stop_previous() -> None:
         STATE[key] = None
 
 def make_dashboard() -> None:
+    import ipywidgets as widgets
+    from IPython.display import display
     mount_drive()
     current = load_settings()
     heading = widgets.HTML("<h2>Anime Colab Studio</h2><p>Modelo, Web UI, túnel, LoRAs y archivos persistentes.</p>")
