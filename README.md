@@ -8,13 +8,23 @@
 
 1. Haz clic en **Open In Colab**.
 2. Selecciona **Entorno de ejecución → Cambiar tipo de entorno de ejecución → GPU**.
-3. Ejecuta las **dos celdas** (o **Ejecutar todo**) y autoriza Google Drive.
+3. Ejecuta las **dos primeras celdas** (o **Ejecutar todo** con el modo directo desactivado) y autoriza Google Drive.
 4. Escoge **modelo, ComfyUI/AUTOMATIC1111, Cloudflare/ngrok, calidad y LoRAs**.
 5. Escribe el **correo Google autorizado para abrir la interfaz remota**.
 6. Pulsa **Instalar e iniciar**. El notebook instala herramientas, descarga el checkpoint y abre una URL privada. Elige solo modelos y contenidos permitidos por el proveedor.
 
 En ejecuciones posteriores los ajustes se cargan desde Google Drive. El botón **Guardar preferencias** permite actualizarlos sin iniciar una instalación.
 
+
+## Si Colab se queda en «Preparando»
+
+**La marca verde de la celda 2 es normal**: el dashboard termina de dibujarse y la instalación sigue en otro proceso. Si no ves cambios, ejecuta la **celda 3: Diagnóstico**, que muestra estado, PID y registros directamente, sin depender de las actualizaciones del widget.
+
+La instalación escribe su primera línea `[BOOT]` antes de importar las bibliotecas de IA. Si el proceso no arranca, el panel indica que el arranque falló o superó 30 segundos. El sistema carga los módulos exclusivos del notebook de forma diferida para que el worker no dependa del frontend.
+
+Si Colab interrumpe el proceso lanzado por el botón, guarda las preferencias en el panel y utiliza la **celda 4: Opcional: iniciar en esta celda y ver cada log en vivo**. Activa la casilla `INICIAR_EN_ESTA_CELDA` y ejecútala. En este modo la celda permanece ejecutándose hasta terminar de instalar y levantar la interfaz/túnel, y muestra los logs de inmediato. No necesitas activar esta alternativa cuando el inicio normal funciona.
+
+Después de una actualización del repositorio, **reinicia el entorno de ejecución** y vuelve a abrir el notebook de la rama `master`; tus archivos de Drive no se eliminan.
 
 ## Progreso visible, registros y cancelación
 
