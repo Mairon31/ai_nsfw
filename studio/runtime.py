@@ -224,3 +224,46 @@ def recent_log(lines: int = 45) -> str:
 
 def render_log(lines=40) -> str:
     return '<pre style="white-space:pre-wrap;max-height:300px;overflow-y:auto;background:#161a20;color:#e6edf3;padding:12px;border-radius:8px;font:12px/1.45 monospace">' + html.escape(recent_log(lines)) + "</pre>"
+
+
+def launch_foreground(config: dict, secrets: dict[str, str]) -> int:
+    """Colab fallback: run the worker in an executing cell with streamed output.
+
+    Unlike launching from a widget callback, the cell remains in RUNNING state
+    until the worker has initialized the Web UI and tunnel (or failed).
+    """
+    if process_active():
+        stop_session()
+    RUNTIME.mkdir(parents=True, exist_ok=True)
+    atomic_json(PIDS, {})
+    atomic_json(CONFIG, config)
+    atomic_json(STATUS, {})
+    for old_log in ("comfyui-server.log", "automatic1111-server.log", "tunnel.log"):
+        (RUNTIME / old_log).unlink(missing_ok=True)
+    LOG.write_text(f"Anime Colab Studio | modo directo {utc_now()}\n", encoding="utf-8")
+    stage("preparing", "Modo directo: lanzando proceso supervisado en esta celda...")
+    env = os.environ.copy()
+    env.update({key: val for key, val in secrets.items() if val})
+    command = [sys.executable, "-u", str(REPO_ROOT / "studio" / "worker.py")]
+    proc = subprocess.Popen(
+        command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, cwd=str(REPO_ROOT),
+        env=env, text=True, bufsize=1, start_new_session=True,
+    )
+    save_pid("worker", proc.pid)
+    print(f"Worker PID {proc.pid}. La celda mostrará el progreso en tiempo real.", flush=True)
+    try:
+        with LOG.open("a", encoding="utf-8", buffering=1) as log:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                log.write(line)
+                print(line, end="", flush=True)
+        exit_code = proc.wait()
+        current = read_json(STATUS)
+        if exit_code != 0 and current.get("stage") not in {"error", "stopped"}:
+            stage("error", f"El worker terminó con código {exit_code}. Consulta los registros.")
+        return exit_code
+    except KeyboardInterrupt:
+        print("\nInterrupción solicitada. Cancelando worker, servidor y túnel...", flush=True)
+        stop_session()
+        raise
