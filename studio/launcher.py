@@ -223,46 +223,74 @@ def write_a1111_settings(app: Path, outdir: Path, profile: str) -> None:
     })
     config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-def comfy_workflow(filename: str, loras: list[str], profile: str) -> dict:
+def comfy_workflow(filename: str, loras: list[str], profile: str, pony: bool = False) -> dict:
+    """Build a native ComfyUI workflow with all selected LoRAs in series."""
     w, h, steps, cfg = profile_values(profile)
-    nodes = [
-        {"id": 1, "type": "CheckpointLoaderSimple", "pos": [60, 170], "size": [330, 100], "flags": {}, "order": 0, "mode": 0, "inputs": [], "outputs": [{"name": "MODEL", "type": "MODEL", "links": []}, {"name": "CLIP", "type": "CLIP", "links": []}, {"name": "VAE", "type": "VAE", "links": []}], "properties": {"Node name for S&R": "CheckpointLoaderSimple"}, "widgets_values": [filename]},
-    ]
+    nodes = [{
+        "id": 1, "type": "CheckpointLoaderSimple", "pos": [60, 170],
+        "size": [330, 100], "flags": {}, "order": 0, "mode": 0,
+        "inputs": [],
+        "outputs": [{"name": n, "type": n, "links": []} for n in ("MODEL", "CLIP", "VAE")],
+        "properties": {"Node name for S&R": "CheckpointLoaderSimple"},
+        "widgets_values": [filename]
+    }]
     links = []
-    def connect(source: int, slot: int, dest: int, destslot: int, datatype: str) -> None:
-        idx = len(links) + 1
-        links.append([idx, source, slot, dest, destslot, datatype])
-        nodes[source - 1]["outputs"][slot]["links"].append(idx)
-        nodes[dest - 1]["inputs"][destslot]["link"] = idx
     def node(nid, typ, x, y, inputs, outputs, values):
-        return {"id": nid, "type": typ, "pos": [x, y], "size": [315, 110], "flags": {}, "order": nid - 1, "mode": 0,
-                "inputs": [{"name": n, "type": t, "link": None} for n,t in inputs],
-                "outputs": [{"name": n, "type": t, "links": []} for n,t in outputs],
-                "properties": {"Node name for S&R": typ}, "widgets_values": values}
-    # The basic SDXL workflow uses a single LoRA as the default. Additional LoRAs
-    # remain installed and can be chained manually via LoraLoader in ComfyUI.
-    selected = loras[0] if loras else None
+        return {
+            "id": nid, "type": typ, "pos": [x, y], "size": [315, 110],
+            "flags": {}, "order": nid - 1, "mode": 0,
+            "inputs": [{"name": n, "type": t, "link": None} for n, t in inputs],
+            "outputs": [{"name": n, "type": t, "links": []} for n, t in outputs],
+            "properties": {"Node name for S&R": typ}, "widgets_values": values
+        }
+    def connect(source, slot, dest, destslot, datatype):
+        link_id = len(links) + 1
+        links.append([link_id, source, slot, dest, destslot, datatype])
+        nodes[source - 1]["outputs"][slot]["links"].append(link_id)
+        nodes[dest - 1]["inputs"][destslot]["link"] = link_id
+
     next_id = 2
     model_src, clip_src = (1, 0), (1, 1)
-    if selected:
-        nodes.append(node(next_id, "LoraLoader", 440, 150, [("model", "MODEL"), ("clip", "CLIP")], [("MODEL", "MODEL"), ("CLIP", "CLIP")], [selected, 0.75, 0.75]))
-        connect(1, 0, 2, 0, "MODEL")
-        connect(1, 1, 2, 1, "CLIP")
-        model_src, clip_src = (2, 0), (2, 1)
+    if pony:
+        nid = next_id
+        nodes.append(node(nid, "CLIPSetLastLayer", 410, 370,
+                          [("clip", "CLIP")], [("CLIP", "CLIP")], [-2]))
+        connect(*clip_src, nid, 0, "CLIP")
+        clip_src = (nid, 0)
         next_id += 1
+
+    for index, filename_lora in enumerate(loras):
+        nid = next_id
+        matched = [v[3] for v in LORAS.values() if Path(v[1]).name == filename_lora]
+        weight = matched[0] if matched else 0.75
+        nodes.append(node(nid, "LoraLoader", 440 + index * 330, 150,
+                          [("model", "MODEL"), ("clip", "CLIP")],
+                          [("MODEL", "MODEL"), ("CLIP", "CLIP")],
+                          [filename_lora, weight, weight]))
+        connect(*model_src, nid, 0, "MODEL")
+        connect(*clip_src, nid, 1, "CLIP")
+        model_src, clip_src = (nid, 0), (nid, 1)
+        next_id += 1
+
     ids = {}
-    for key, typ, ins, outs, values, y in [
-        ("positive", "CLIPTextEncode", [("clip", "CLIP")], [("CONDITIONING", "CONDITIONING")], ["masterpiece, best quality, adult woman, solo, beautiful lighting, detailed anime illustration"], 20),
-        ("negative", "CLIPTextEncode", [("clip", "CLIP")], [("CONDITIONING", "CONDITIONING")], ["low quality, blurry, deformed, watermark, text"], 200),
+    regular = [
+        ("positive", "CLIPTextEncode", [("clip", "CLIP")], [("CONDITIONING", "CONDITIONING")],
+         ["masterpiece, best quality, adult woman, solo, detailed anime illustration"], 20),
+        ("negative", "CLIPTextEncode", [("clip", "CLIP")], [("CONDITIONING", "CONDITIONING")],
+         ["low quality, blurry, deformed, watermark, text"], 200),
         ("latent", "EmptyLatentImage", [], [("LATENT", "LATENT")], [w, h, 1], 410),
-        ("ksampler", "KSampler", [("model", "MODEL"), ("positive", "CONDITIONING"), ("negative", "CONDITIONING"), ("latent_image", "LATENT")], [("LATENT", "LATENT")], [12345, "randomize", steps, cfg, "dpmpp_2m", "karras", 1.0], 150),
-        ("decode", "VAEDecode", [("samples", "LATENT"), ("vae", "VAE")], [("IMAGE", "IMAGE")], [], 220),
-        ("save", "SaveImage", [("images", "IMAGE")], [], ["AnimeStudio"], 220),
-    ]:
+        ("ksampler", "KSampler", [("model", "MODEL"), ("positive", "CONDITIONING"), ("negative", "CONDITIONING"), ("latent_image", "LATENT")],
+         [("LATENT", "LATENT")], [12345, "randomize", steps, cfg, "dpmpp_2m", "karras", 1.0], 150),
+        ("decode", "VAEDecode", [("samples", "LATENT"), ("vae", "VAE")],
+         [("IMAGE", "IMAGE")], [], 220),
+        ("save", "SaveImage", [("images", "IMAGE")], [], ["AnimeStudio"], 220)
+    ]
+    for key, typ, ins, outs, values, y in regular:
         nid = next_id
         ids[key] = nid
         next_id += 1
-        x = {"positive": 810, "negative": 810, "latent": 810, "ksampler": 1220, "decode": 1580, "save": 1950}[key]
+        x = {"positive": 850, "negative": 850, "latent": 850, "ksampler": 1240,
+             "decode": 1600, "save": 1950}[key] + len(loras) * 250
         nodes.append(node(nid, typ, x, y, ins, outs, values))
     connect(*clip_src, ids["positive"], 0, "CLIP")
     connect(*clip_src, ids["negative"], 0, "CLIP")
@@ -273,8 +301,11 @@ def comfy_workflow(filename: str, loras: list[str], profile: str) -> dict:
     connect(ids["ksampler"], 0, ids["decode"], 0, "LATENT")
     connect(1, 2, ids["decode"], 1, "VAE")
     connect(ids["decode"], 0, ids["save"], 0, "IMAGE")
-    return {"last_node_id": next_id - 1, "last_link_id": len(links), "nodes": nodes, "links": links, "groups": [],
-            "config": {}, "extra": {"ds": {"scale": 0.75, "offset": [100, 90]}}, "version": 0.4}
+    return {
+        "last_node_id": next_id - 1, "last_link_id": len(links),
+        "nodes": nodes, "links": links, "groups": [], "config": {},
+        "extra": {"ds": {"scale": 0.75, "offset": [100, 90]}}, "version": 0.4
+    }
 
 def launch_ui(app: Path, config: dict, output_root: Path) -> tuple[int, Path]:
     ui_name = config["ui"]
@@ -285,7 +316,7 @@ def launch_ui(app: Path, config: dict, output_root: Path) -> tuple[int, Path]:
         args = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(port), "--output-directory", str(output_root)]
         workflow_folder = app / "user" / "default" / "workflows"
         workflow_folder.mkdir(parents=True, exist_ok=True)
-        wf = comfy_workflow(MODELS[config["model"]][1], STATE.get("installed_loras", []), config["profile"])
+        wf = comfy_workflow(MODELS[config["model"]][1], STATE.get("installed_loras", []), config["profile"], pony=MODELS[config["model"]][2] == "pony")
         (workflow_folder / "AnimeStudio.json").write_text(json.dumps(wf, ensure_ascii=False, indent=2))
         (DRIVE_ROOT / "AnimeStudio-workflow.json").write_text(json.dumps(wf, ensure_ascii=False, indent=2))
     else:
