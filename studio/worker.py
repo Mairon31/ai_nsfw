@@ -91,6 +91,8 @@ def start():
         progress("extras", "Instalando ADetailer...")
         extension = app / "extensions" / "adetailer"
         if not (extension / "scripts").exists():
+            if extension.exists():
+                launcher.shutil.rmtree(extension)
             launcher.run(["git", "clone", "--depth", "1", "https://github.com/Bing-su/adetailer.git", str(extension)])
 
     destination = (launcher.DRIVE_ROOT if cfg.get("save_to_drive", True) else launcher.LOCAL_ROOT) / "outputs" / cfg["model"].replace(" ", "_")
