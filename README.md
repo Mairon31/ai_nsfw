@@ -10,11 +10,23 @@
 2. Selecciona **Entorno de ejecución → Cambiar tipo de entorno de ejecución → GPU**.
 3. Ejecuta las **dos primeras celdas** (o **Ejecutar todo** con el modo directo desactivado) y autoriza Google Drive.
 4. Escoge **modelo, ComfyUI/AUTOMATIC1111, Cloudflare/ngrok, calidad y LoRAs**.
-5. Escribe el **correo Google autorizado para abrir la interfaz remota**.
-6. Pulsa **Instalar e iniciar**. El notebook instala herramientas, descarga el checkpoint y abre una URL privada. Elige solo modelos y contenidos permitidos por el proveedor.
+5. No hace falta correo ni PIN: Cloudflare y ngrok usan una **contraseña de sesión** gestionada por el proxy de acceso. Puedes guardar `WEBUI_PASSWORD` en los Secretos de Colab o usar la que se genera al iniciar.
+6. Pulsa **Instalar / iniciar** para levantar el servidor. Después, ejecuta la **celda 5 — Supervisar sesión** para mantener una celda activa mientras trabajas en la Web UI. Los archivos se conservan en Drive cuando están habilitados.
 
 En ejecuciones posteriores los ajustes se cargan desde Google Drive. El botón **Guardar preferencias** permite actualizarlos sin iniciar una instalación.
 
+
+## Celda activa: supervisión continua y límites de Colab
+
+**Si tu notebook deja de ejecutar código después de iniciar la Web UI:** abre el notebook actualizado, ejecuta las celdas 1 y 2, pulsa **Instalar / iniciar** y ejecuta la **celda 5 — Mantener la celda ejecutándose mientras supervisa la Web UI**. Puedes arrancar la supervisión mientras se instala el motor; seguirá mostrando cambios de etapa y, después, comprobará periódicamente la API real de AUTOMATIC1111 o ComfyUI.
+
+- **La celda 5 queda en estado «Ejecutando» mientras la instalación o el servidor estén activos.** Muestra la hora, la etapa de instalación, la disponibilidad de la API y el estado de la sesión.
+- **No simula clics ni actividad falsa:** supervisa un servicio realmente ejecutándose. Los botones del panel siguen disponibles porque usa esperas asíncronas.
+- **Si pulsas Detener en la celda 5**, terminas únicamente el monitor. Para cerrar el servidor y túnel usa **Detener / cancelar** de la celda 2.
+- **Alternativa de un solo proceso:** la celda 4 (inicio directo) ahora continúa supervisando el servidor después de completar la instalación. Si detienes manualmente esa celda, se cierra su sesión supervisada.
+- **Si Google apaga la máquina virtual**, la supervisión también termina y la URL temporal del túnel deja de funcionar. Reabre Colab, vuelve a iniciar y restaura preferencias, checkpoints e imágenes desde Google Drive.
+
+Colab aplica sus límites oficiales: periodos de inactividad, máxima vida de la VM, saldo de unidades de cómputo y disponibilidad de GPU. Tener una celda ejecutándose **puede permitir la ejecución continua cuando tu plan lo admite**, pero **no evita las limitaciones ni garantiza una sesión ininterrumpida**. Consultar: [Preguntas frecuentes de Colab](https://research.google.com/colaboratory/faq.html). Para tiempos garantizados, considera una VM dedicada o un entorno de ejecución local.
 
 ## Corrección AUTOMATIC1111 para Colab Python 3.13 (octubre 2026)
 
