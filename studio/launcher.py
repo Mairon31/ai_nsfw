@@ -1,0 +1,504 @@
+"""Interactive Colab launcher. No secrets are written to Git or Drive."""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+from urllib.parse import urlparse, unquote
+
+import ipywidgets as widgets
+from IPython.display import display
+from huggingface_hub import hf_hub_download
+import requests
+
+from google.colab import drive, userdata
+
+VERSION = "1.0.0"
+ROOT = Path("/content")
+DRIVE_MOUNT = ROOT / "drive"
+DRIVE_ROOT = DRIVE_MOUNT / "MyDrive" / "AnimeColabStudio"
+LOCAL_ROOT = ROOT / "AnimeColabStudio"
+SETTINGS = DRIVE_ROOT / "settings.json"
+
+MODELS = {
+    "NoobAI-XL 1.0": ("Laxhar/noobai-XL-1.0", "NoobAI-XL-v1.0.safetensors", "noob"),
+    "Pony Diffusion V6 XL": ("6chan/Pony-Diffusion-V6-XL", "ponyDiffusionV6XL_v6StartWithThisOne.safetensors", "pony"),
+    "WAI-Illustrious SDXL v17": ("yufusoft/WAI-illustrious-SDXL", "waiIllustriousSDXL_v170.safetensors", "illustrious"),
+    "WAI-NSFW-Illustrious v12 (legacy)": ("TheReprinter/WAI-NSFW-illustrious-SDXL", "waiNSFWIllustrious_v12.safetensors", "illustrious"),
+    "Animagine XL 4.0 Opt": ("cagliostrolab/animagine-xl-4.0", "animagine-xl-4.0-opt.safetensors", "sdxl"),
+    "Illustrious XL 1.0": ("drawhisper/illustrious-xl", "illustrious-xl.safetensors", "illustrious"),
+}
+LORAS = {
+    "Anime Style XL (general SDXL)": ("SUPER321/my-animestyle-lora", "pytorch_lora_weights.safetensors", ("sdxl", "noob"), 0.65),
+    "Sensual Face v3 Type 1 (Illustrious)": ("JujoHotaru/lora", "sdxl/sensualface1_xl_v30.safetensors", ("illustrious",), 0.7),
+    "Sensual Face v3 Type 2 (Illustrious)": ("JujoHotaru/lora", "sdxl/sensualface2_xl_v30.safetensors", ("illustrious",), 0.7),
+    "Sensual Face v2 Type 1 (Pony)": ("JujoHotaru/lora", "sdxl/sensualface1_xl_v20.safetensors", ("pony",), 0.7),
+    "Sensual Face v2 Type 2 (Pony)": ("JujoHotaru/lora", "sdxl/sensualface2_xl_v20.safetensors", ("pony",), 0.7),
+}
+DEFAULTS = {
+    "model": "NoobAI-XL 1.0",
+    "ui": "ComfyUI",
+    "tunnel": "Cloudflare",
+    "allowed_email": "",
+    "save_to_drive": True,
+    "cache_models": False,
+    "loras": [],
+    "custom_loras": "",
+    "profile": "Balanced",
+}
+STATE = {"ui_process": None, "tunnel_process": None}
+
+def secret(name: str) -> str:
+    try:
+        return (userdata.get(name) or "").strip()
+    except Exception:
+        return ""
+
+def check_gpu() -> None:
+    result = subprocess.run(["nvidia-smi"], capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError("No hay GPU NVIDIA. Colab > Entorno de ejecución > Cambiar tipo > GPU.")
+    print(result.stdout.splitlines()[0])
+
+def mount_drive() -> None:
+    if not (DRIVE_MOUNT / "MyDrive").exists():
+        drive.mount(str(DRIVE_MOUNT))
+    DRIVE_ROOT.mkdir(parents=True, exist_ok=True)
+
+def load_settings() -> dict:
+    try:
+        data = json.loads(SETTINGS.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return {**DEFAULTS, **{k: v for k, v in data.items() if k in DEFAULTS}}
+    except (OSError, ValueError):
+        pass
+    return DEFAULTS.copy()
+
+def save_settings(config: dict) -> None:
+    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    safe_config = {key: config[key] for key in DEFAULTS}
+    temp = SETTINGS.with_suffix(".tmp")
+    temp.write_text(json.dumps(safe_config, indent=2, ensure_ascii=False), encoding="utf-8")
+    temp.replace(SETTINGS)
+
+def run(command, *, cwd=None, env=None) -> None:
+    subprocess.run(command, cwd=cwd, env=env, check=True)
+
+def install_ui(ui_name: str) -> Path:
+    if ui_name == "ComfyUI":
+        path = ROOT / "ComfyUI"
+        if not (path / "main.py").exists():
+            run(["git", "clone", "--depth", "1", "https://github.com/Comfy-Org/ComfyUI.git", str(path)])
+        run([sys.executable, "-m", "pip", "install", "-q", "-r", str(path / "requirements.txt")])
+    else:
+        path = ROOT / "stable-diffusion-webui"
+        if not (path / "launch.py").exists():
+            run(["git", "clone", "--depth", "1", "https://github.com/AUTOMATIC1111/stable-diffusion-webui.git", str(path)])
+    return path
+
+def model_dir(app: Path, ui_name: str) -> Path:
+    return app / "models" / ("checkpoints" if ui_name == "ComfyUI" else "Stable-diffusion")
+
+def lora_dir(app: Path, ui_name: str) -> Path:
+    return app / "models" / ("loras" if ui_name == "ComfyUI" else "Lora")
+
+def safe_link(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.is_symlink():
+        if destination.resolve() == source.resolve():
+            return
+        destination.unlink()
+    elif destination.exists():
+        if destination.resolve() == source.resolve():
+            return
+        raise FileExistsError(f"No se sobrescribirá: {destination}")
+    destination.symlink_to(source)
+
+def download_hf(repo: str, filename: str, folder: Path, token: str | None = None) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    file = folder / Path(filename).name
+    if file.exists() and file.stat().st_size > 1024 * 1024:
+        return file
+    # Download into the Hugging Face cache and copy only after the file is complete.
+    downloaded = Path(hf_hub_download(repo_id=repo, filename=filename, token=token or None))
+    temporary = file.with_suffix(file.suffix + ".part")
+    shutil.copyfile(downloaded, temporary)
+    temporary.replace(file)
+    return file
+
+def parse_custom_lora(line: str) -> tuple[str, str]:
+    # Supported: hf://owner/repo/path.safetensors or direct Civitai/Hugging Face HTTPS link.
+    line = line.strip()
+    if line.startswith("hf://"):
+        match = re.fullmatch(r"hf://([^/]+)/([^/]+)/(.+\.safetensors)", line, re.I)
+        if not match:
+            raise ValueError("Formato HF: hf://usuario/repositorio/archivo.safetensors")
+        owner, repository, filename = match.groups()
+        return "hf", f"{owner}/{repository}|{filename}"
+    url = urlparse(line)
+    if url.scheme != "https" or url.hostname not in {"huggingface.co", "civitai.com"}:
+        raise ValueError("LoRA personalizado: utiliza hf:// o HTTPS de huggingface.co/civitai.com.")
+    if url.hostname == "huggingface.co":
+        match = re.match(r"^/([^/]+)/([^/]+)/(?:resolve|blob)/([^/]+)/(.+\.safetensors)$", url.path, re.I)
+        if not match:
+            raise ValueError("URL Hugging Face: debe ser /resolve/main/ruta/archivo.safetensors")
+        owner, repo, revision, filename = match.groups()
+        return "hf", f"{owner}/{repo}|{unquote(filename)}|{revision}"
+    return "url", line
+
+def download_custom_lora(line: str, folder: Path) -> Path:
+    kind, value = parse_custom_lora(line)
+    if kind == "hf":
+        repo, filename, *revision = value.split("|")
+        # Use the API for revision-aware downloads.
+        folder.mkdir(parents=True, exist_ok=True)
+        basename = Path(filename).name
+        target = folder / basename
+        if target.exists() and target.stat().st_size > 1024:
+            return target
+        local = Path(hf_hub_download(repo, filename, revision=revision[0] if revision else "main", token=secret("HF_TOKEN") or None))
+        part = target.with_suffix(".safetensors.part")
+        shutil.copyfile(local, part)
+        part.replace(target)
+        return target
+    folder.mkdir(parents=True, exist_ok=True)
+    response = requests.get(value, headers={"Authorization": f"Bearer {secret('CIVITAI_API_TOKEN')}"} if secret("CIVITAI_API_TOKEN") else {}, stream=True, timeout=45)
+    response.raise_for_status()
+    name = Path(unquote(urlparse(response.url).path)).name
+    if not name.lower().endswith(".safetensors"):
+        name = "civitai_" + re.search(r"/(\d+)", urlparse(value).path).group(1) + ".safetensors" if re.search(r"/(\d+)", urlparse(value).path) else "custom_lora.safetensors"
+    target = folder / name
+    part = target.with_suffix(".safetensors.part")
+    try:
+        with part.open("wb") as fh:
+            for chunk in response.iter_content(1024 * 1024):
+                if chunk:
+                    fh.write(chunk)
+        if part.stat().st_size < 1024:
+            raise ValueError("Descarga demasiado pequeña; verifica token/URL.")
+        part.replace(target)
+    finally:
+        part.unlink(missing_ok=True)
+        response.close()
+    return target
+
+def profile_values(name: str) -> tuple[int, int, int, float]:
+    presets = {
+        "Balanced": (832, 1216, 28, 6.0),
+        "High quality": (1024, 1536, 36, 6.0),
+        "Low VRAM": (768, 1024, 22, 5.0),
+    }
+    return presets.get(name, presets["Balanced"])
+
+def write_a1111_settings(app: Path, outdir: Path, profile: str) -> None:
+    width, height, steps, cfg = profile_values(profile)
+    config_path = app / "config.json"
+    try:
+        data = json.loads(config_path.read_text())
+    except (OSError, ValueError):
+        data = {}
+    data.update({
+        "samples_save": True,
+        "samples_format": "png",
+        "save_images_add_number": True,
+        "enable_pnginfo": True,
+        "outdir_txt2img_samples": str(outdir / "txt2img"),
+        "outdir_img2img_samples": str(outdir / "img2img"),
+        "outdir_extras_samples": str(outdir / "extras"),
+        "outdir_txt2img_grids": str(outdir / "grids"),
+        "outdir_img2img_grids": str(outdir / "grids"),
+        "grid_save": False,
+        "CLIP_stop_at_last_layers": 2,
+        "sd_model_checkpoint": None,
+        "txt2img/Width/value": width,
+        "txt2img/Height/value": height,
+        "txt2img/Sampling steps/value": steps,
+        "txt2img/CFG Scale/value": cfg,
+    })
+    config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+def comfy_workflow(filename: str, loras: list[str], profile: str) -> dict:
+    w, h, steps, cfg = profile_values(profile)
+    nodes = [
+        {"id": 1, "type": "CheckpointLoaderSimple", "pos": [60, 170], "size": [330, 100], "flags": {}, "order": 0, "mode": 0, "inputs": [], "outputs": [{"name": "MODEL", "type": "MODEL", "links": []}, {"name": "CLIP", "type": "CLIP", "links": []}, {"name": "VAE", "type": "VAE", "links": []}], "properties": {"Node name for S&R": "CheckpointLoaderSimple"}, "widgets_values": [filename]},
+    ]
+    links = []
+    def connect(source: int, slot: int, dest: int, destslot: int, datatype: str) -> None:
+        idx = len(links) + 1
+        links.append([idx, source, slot, dest, destslot, datatype])
+        nodes[source - 1]["outputs"][slot]["links"].append(idx)
+        nodes[dest - 1]["inputs"][destslot]["link"] = idx
+    def node(nid, typ, x, y, inputs, outputs, values):
+        return {"id": nid, "type": typ, "pos": [x, y], "size": [315, 110], "flags": {}, "order": nid - 1, "mode": 0,
+                "inputs": [{"name": n, "type": t, "link": None} for n,t in inputs],
+                "outputs": [{"name": n, "type": t, "links": []} for n,t in outputs],
+                "properties": {"Node name for S&R": typ}, "widgets_values": values}
+    # The basic SDXL workflow uses a single LoRA as the default. Additional LoRAs
+    # remain installed and can be chained manually via LoraLoader in ComfyUI.
+    selected = loras[0] if loras else None
+    next_id = 2
+    model_src, clip_src = (1, 0), (1, 1)
+    if selected:
+        nodes.append(node(next_id, "LoraLoader", 440, 150, [("model", "MODEL"), ("clip", "CLIP")], [("MODEL", "MODEL"), ("CLIP", "CLIP")], [selected, 0.75, 0.75]))
+        connect(1, 0, 2, 0, "MODEL")
+        connect(1, 1, 2, 1, "CLIP")
+        model_src, clip_src = (2, 0), (2, 1)
+        next_id += 1
+    ids = {}
+    for key, typ, ins, outs, values, y in [
+        ("positive", "CLIPTextEncode", [("clip", "CLIP")], [("CONDITIONING", "CONDITIONING")], ["masterpiece, best quality, adult woman, solo, beautiful lighting, detailed anime illustration"], 20),
+        ("negative", "CLIPTextEncode", [("clip", "CLIP")], [("CONDITIONING", "CONDITIONING")], ["low quality, blurry, deformed, watermark, text"], 200),
+        ("latent", "EmptyLatentImage", [], [("LATENT", "LATENT")], [w, h, 1], 410),
+        ("ksampler", "KSampler", [("model", "MODEL"), ("positive", "CONDITIONING"), ("negative", "CONDITIONING"), ("latent_image", "LATENT")], [("LATENT", "LATENT")], [12345, "randomize", steps, cfg, "dpmpp_2m", "karras", 1.0], 150),
+        ("decode", "VAEDecode", [("samples", "LATENT"), ("vae", "VAE")], [("IMAGE", "IMAGE")], [], 220),
+        ("save", "SaveImage", [("images", "IMAGE")], [], ["AnimeStudio"], 220),
+    ]:
+        nid = next_id
+        ids[key] = nid
+        next_id += 1
+        x = {"positive": 810, "negative": 810, "latent": 810, "ksampler": 1220, "decode": 1580, "save": 1950}[key]
+        nodes.append(node(nid, typ, x, y, ins, outs, values))
+    connect(*clip_src, ids["positive"], 0, "CLIP")
+    connect(*clip_src, ids["negative"], 0, "CLIP")
+    connect(*model_src, ids["ksampler"], 0, "MODEL")
+    connect(ids["positive"], 0, ids["ksampler"], 1, "CONDITIONING")
+    connect(ids["negative"], 0, ids["ksampler"], 2, "CONDITIONING")
+    connect(ids["latent"], 0, ids["ksampler"], 3, "LATENT")
+    connect(ids["ksampler"], 0, ids["decode"], 0, "LATENT")
+    connect(1, 2, ids["decode"], 1, "VAE")
+    connect(ids["decode"], 0, ids["save"], 0, "IMAGE")
+    return {"last_node_id": next_id - 1, "last_link_id": len(links), "nodes": nodes, "links": links, "groups": [],
+            "config": {}, "extra": {"ds": {"scale": 0.75, "offset": [100, 90]}}, "version": 0.4}
+
+def launch_ui(app: Path, config: dict, output_root: Path) -> tuple[int, Path]:
+    ui_name = config["ui"]
+    port = 8188 if ui_name == "ComfyUI" else 7860
+    logfile = LOCAL_ROOT / f"{ui_name.lower()}-server.log"
+    logfile.parent.mkdir(parents=True, exist_ok=True)
+    if ui_name == "ComfyUI":
+        args = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(port), "--output-directory", str(output_root)]
+        workflow_folder = app / "user" / "default" / "workflows"
+        workflow_folder.mkdir(parents=True, exist_ok=True)
+        wf = comfy_workflow(MODELS[config["model"]][1], STATE.get("installed_loras", []), config["profile"])
+        (workflow_folder / "AnimeStudio.json").write_text(json.dumps(wf, ensure_ascii=False, indent=2))
+        (DRIVE_ROOT / "AnimeStudio-workflow.json").write_text(json.dumps(wf, ensure_ascii=False, indent=2))
+    else:
+        write_a1111_settings(app, output_root, config["profile"])
+        args = [sys.executable, "launch.py", "--listen", "--port", str(port), "--skip-python-version-check", "--skip-torch-cuda-test", "--no-download-sd-model"]
+        password = secret("WEBUI_PASSWORD")
+        if password:
+            args += ["--gradio-auth", f"studio:{password}"]
+    env = os.environ.copy()
+    if ui_name != "ComfyUI":
+        env["VENV_DIR"] = "-"
+    with logfile.open("ab") as stream:
+        proc = subprocess.Popen(args, cwd=str(app), env=env, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+    STATE["ui_process"] = proc
+    return port, logfile
+
+def wait_for_http(port: int, proc: subprocess.Popen, log: Path, timeout: int = 600) -> None:
+    for _ in range(timeout // 3):
+        if proc.poll() is not None:
+            raise RuntimeError(f"Web UI terminó antes de iniciar. Últimas líneas:\n{tail(log)}")
+        try:
+            response = requests.get(f"http://127.0.0.1:{port}/", timeout=3)
+            if response.status_code < 500:
+                return
+        except requests.RequestException:
+            pass
+        time.sleep(3)
+    raise TimeoutError(f"Web UI no respondió. Registro:\n{tail(log)}")
+
+def tail(path: Path, lines: int = 24) -> str:
+    try:
+        return "\n".join(path.read_text(errors="replace").splitlines()[-lines:])
+    except OSError:
+        return "(log no disponible)"
+
+def launch_tunnel(tunnel: str, port: int, email: str) -> str:
+    if tunnel == "Local only":
+        return f"http://127.0.0.1:{port} (solo desde Colab)"
+    if not re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", email):
+        raise ValueError("Indica el correo autorizado para proteger el acceso remoto.")
+    logfile = LOCAL_ROOT / "tunnel.log"
+    if tunnel == "Cloudflare":
+        executable = ROOT / "cloudflared"
+        if not executable.exists():
+            res = requests.get("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", timeout=90)
+            res.raise_for_status()
+            executable.write_bytes(res.content)
+            executable.chmod(0o755)
+        command = [str(executable), "--no-autoupdate", "tunnel", "--url", f"http://127.0.0.1:{port}", "--allowed-mail", email]
+    else:
+        token = secret("NGROK_AUTHTOKEN")
+        if not token:
+            raise ValueError("Configura NGROK_AUTHTOKEN en el panel de Secretos de Colab.")
+        executable = ROOT / "ngrok"
+        if not executable.exists():
+            archive = ROOT / "ngrok.tar.gz"
+            response = requests.get("https://bin.ngrok.com/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz", timeout=90)
+            response.raise_for_status()
+            archive.write_bytes(response.content)
+            run(["tar", "-xzf", str(archive), "-C", str(ROOT)])
+            executable.chmod(0o755)
+        run([str(executable), "config", "add-authtoken", token])
+        policy = LOCAL_ROOT / "ngrok-policy.json"
+        policy.write_text(json.dumps({"on_http_request": [
+            {"actions": [{"type": "oauth", "config": {"provider": "google"}}]},
+            {"expressions": [f'actions.ngrok.oauth.identity.email != "{email}"'], "actions": [{"type": "deny"}]}
+        ]}))
+        command = [str(executable), "http", str(port), "--traffic-policy-file", str(policy)]
+    with logfile.open("wb") as stream:
+        proc = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+    STATE["tunnel_process"] = proc
+    for _ in range(55):
+        if proc.poll() is not None:
+            raise RuntimeError(f"No se pudo abrir túnel:\n{tail(logfile)}")
+        if tunnel == "Cloudflare":
+            match = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", logfile.read_text(errors="replace"))
+            if match:
+                return match.group(0)
+        else:
+            try:
+                tunnels = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=2).json().get("tunnels", [])
+                for item in tunnels:
+                    url = item.get("public_url", "")
+                    if url.startswith("https://"):
+                        return url
+            except (requests.RequestException, ValueError):
+                pass
+        time.sleep(2)
+    raise TimeoutError(f"No se encontró URL pública:\n{tail(logfile)}")
+
+def stop_previous() -> None:
+    for key in ("tunnel_process", "ui_process"):
+        proc = STATE.get(key)
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        STATE[key] = None
+
+def make_dashboard() -> None:
+    mount_drive()
+    current = load_settings()
+    heading = widgets.HTML("<h2>Anime Colab Studio</h2><p>Modelo, Web UI, túnel, LoRAs y archivos persistentes.</p>")
+    model = widgets.Dropdown(options=list(MODELS), value=current["model"], description="Modelo:", layout=widgets.Layout(width="98%"), style={"description_width": "100px"})
+    ui = widgets.ToggleButtons(options=["ComfyUI", "AUTOMATIC1111"], value=current["ui"], description="Interfaz:")
+    tunnel = widgets.ToggleButtons(options=["Cloudflare", "ngrok", "Local only"], value=current["tunnel"], description="Túnel:")
+    email = widgets.Text(value=current["allowed_email"], description="Tu correo:", placeholder="usuario@gmail.com", layout=widgets.Layout(width="98%"), style={"description_width": "100px"})
+    save_images = widgets.Checkbox(value=current["save_to_drive"], description="Guardar imágenes PNG automáticamente en Google Drive", indent=False)
+    cache = widgets.Checkbox(value=current["cache_models"], description="Guardar modelos y LoRAs en Drive (requiere ~7 GB/modelo)", indent=False)
+    profile = widgets.Dropdown(options=["Balanced", "High quality", "Low VRAM"], value=current["profile"], description="Calidad:")
+    choices = widgets.SelectMultiple(options=list(LORAS), value=tuple(v for v in current["loras"] if v in LORAS), description="LoRAs:", rows=5, layout=widgets.Layout(width="98%"), style={"description_width": "100px"})
+    custom = widgets.Textarea(value=current["custom_loras"], description="Extra:", placeholder="Una URL https://... o hf://owner/repo/modelo.safetensors por línea", rows=3, layout=widgets.Layout(width="98%"), style={"description_width": "100px"})
+    note = widgets.HTML()
+    def refresh(*_):
+        family = MODELS[model.value][2]
+        compatible = [k for k, v in LORAS.items() if family in v[2]]
+        choices.options = compatible
+        note.value = f"<small>LoRAs compatibles sugeridos para <b>{family}</b>. Evita mezclar LoRAs Pony, SDXL e Illustrious sin comprobar compatibilidad.</small>"
+    model.observe(refresh, names="value")
+    refresh()
+    valid_saved = [x for x in current["loras"] if x in list(choices.options)]
+    choices.value = tuple(valid_saved)
+    def get_config():
+        return {"model": model.value, "ui": ui.value, "tunnel": tunnel.value, "allowed_email": email.value.strip(),
+                "save_to_drive": bool(save_images.value), "cache_models": bool(cache.value), "profile": profile.value,
+                "loras": list(choices.value), "custom_loras": custom.value.strip()}
+    status = widgets.HTML("<b>Preparado.</b> Configura y pulsa Iniciar.")
+    logs = widgets.Output(layout=widgets.Layout(border="1px solid #555", max_height="290px", overflow="auto"))
+    save_button = widgets.Button(description="Guardar preferencias", button_style="")
+    start_button = widgets.Button(description="Instalar e iniciar", button_style="success", icon="play")
+    stop_button = widgets.Button(description="Detener servidor y túnel", button_style="warning", icon="stop")
+    def save_click(_):
+        save_settings(get_config())
+        status.value = "<b>Preferencias guardadas en Google Drive.</b>"
+    save_button.on_click(save_click)
+    def stop_click(_):
+        stop_previous()
+        status.value = "<b>Procesos detenidos. Las imágenes en Drive permanecen guardadas.</b>"
+    stop_button.on_click(stop_click)
+    def job():
+        cfg = get_config()
+        start_button.disabled = True
+        def log(message):
+            logs.append_stdout(str(message) + "\n")
+            status.value = "<b>" + str(message).replace("<", "&lt;") + "</b>"
+        try:
+            save_settings(cfg)
+            check_gpu()
+            log("Instalando interfaz...")
+            app = install_ui(cfg["ui"])
+            repo, filename, _ = MODELS[cfg["model"]]
+            store = (DRIVE_ROOT if cfg["cache_models"] else LOCAL_ROOT)
+            checkpoints = store / "checkpoints"
+            loras_folder = store / "loras"
+            token = secret("HF_TOKEN") or None
+            log(f"Descargando/verificando checkpoint: {cfg['model']}")
+            checkpoint = download_hf(repo, filename, checkpoints, token)
+            if checkpoint.stat().st_size < 1_000_000_000:
+                raise ValueError("Checkpoint demasiado pequeño: podría estar incompleto.")
+            safe_link(checkpoint, model_dir(app, cfg["ui"]) / filename)
+            installed = []
+            for selection in cfg["loras"]:
+                if selection not in LORAS:
+                    continue
+                repo_lora, file_lora, compatible, _ = LORAS[selection]
+                if MODELS[cfg["model"]][2] not in compatible:
+                    continue
+                log(f"Descargando LoRA: {selection}")
+                file = download_hf(repo_lora, file_lora, loras_folder, token)
+                safe_link(file, lora_dir(app, cfg["ui"]) / file.name)
+                installed.append(file.name)
+            for item in cfg["custom_loras"].splitlines():
+                if not item.strip() or item.strip().startswith("#"):
+                    continue
+                log(f"Descargando LoRA personalizado: {item[:45]}...")
+                file = download_custom_lora(item, loras_folder)
+                safe_link(file, lora_dir(app, cfg["ui"]) / file.name)
+                installed.append(file.name)
+            STATE["installed_loras"] = installed
+            destination = (DRIVE_ROOT if cfg["save_to_drive"] else LOCAL_ROOT) / "outputs" / cfg["model"].replace(" ", "_")
+            destination.mkdir(parents=True, exist_ok=True)
+            stop_previous()
+            log("Iniciando motor de generación...")
+            port, app_log = launch_ui(app, cfg, destination)
+            wait_for_http(port, STATE["ui_process"], app_log)
+            log("Creando acceso web privado...")
+            url = launch_tunnel(cfg["tunnel"], port, cfg["allowed_email"])
+            status.value = f'<b>Servidor listo:</b> <a href="{url}" target="_blank">{url}</a><br/>Imágenes: <code>{destination}</code>'
+            logs.append_stdout("Interfaz: " + cfg["ui"] + "\n")
+            logs.append_stdout("Modelo: " + filename + "\n")
+            logs.append_stdout("LoRAs instalados: " + (", ".join(installed) or "(ninguno)") + "\n")
+            if cfg["ui"] == "AUTOMATIC1111" and installed:
+                logs.append_stdout("Usa en el prompt: " + " ".join(f"<lora:{Path(x).stem}:0.7>" for x in installed) + "\n")
+            if cfg["ui"] == "ComfyUI":
+                logs.append_stdout("Workflow listo en ComfyUI > Workflows > AnimeStudio y en Drive/AnimeColabStudio/AnimeStudio-workflow.json\n")
+        except Exception as error:
+            logs.append_stdout(f"ERROR ({type(error).__name__}): {error}\n")
+            status.value = "<b>Error de inicio. Consulta el registro y vuelve a intentar.</b>"
+        finally:
+            start_button.disabled = False
+    def start_click(_):
+        logs.clear_output()
+        status.value = "<b>Iniciando...</b>"
+        threading.Thread(target=job, daemon=True).start()
+    start_button.on_click(start_click)
+    display(widgets.VBox([heading, model, ui, tunnel, email, profile, save_images, cache,
+                          widgets.HTML("<b>LoRAs preseleccionados (opcional)</b>"), choices,
+                          widgets.HTML("<b>LoRAs personalizados (opcional)</b>"), custom, note,
+                          widgets.HBox([save_button, start_button, stop_button]), status, logs]))
+    print("Secretos opcionales en Colab > icono de llave: HF_TOKEN, NGROK_AUTHTOKEN, CIVITAI_API_TOKEN, WEBUI_PASSWORD.")
+    print("Nunca guardamos contraseñas ni tokens en Google Drive.")
+
+if __name__ == "__main__":
+    make_dashboard()
