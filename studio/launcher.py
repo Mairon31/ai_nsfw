@@ -497,7 +497,7 @@ def tail(path: Path, lines: int = 24) -> str:
     except OSError:
         return "(log no disponible)"
 
-def launch_tunnel(tunnel: str, port: int, email: str) -> str:
+def launch_tunnel(tunnel: str, port: int) -> str:
     if tunnel == "Local only":
         return f"http://127.0.0.1:{port} (solo desde Colab)"
     logfile = LOCAL_ROOT / "tunnel.log"
