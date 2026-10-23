@@ -143,6 +143,38 @@ class StudioTests(unittest.TestCase):
             self.assertFalse(broken.exists())
             self.assertEqual(preserved.read_bytes(), b"preserve")
 
+    def test_clip_preinstall_disables_build_isolation_and_preserves_torch(self):
+        from unittest.mock import MagicMock
+        interpreter = Path("/virtual/isolated/bin/python")
+        commands = []
+        def run_capture(cmd, **kwargs):
+            commands.append(cmd)
+        with patch.object(studio.subprocess, "run",
+                          side_effect=[
+                              MagicMock(returncode=1, stderr="Missing pkg_resources"),
+                              MagicMock(returncode=0, stdout="clip version: 1.0"),
+                          ]), patch.object(studio, "run", side_effect=run_capture):
+            studio.ensure_a1111_clip(interpreter)
+        self.assertEqual(len(commands), 2)
+        self.assertIn("setuptools==69.5.1", commands[0])
+        self.assertIn("wheel", commands[0])
+        self.assertIn("ftfy", commands[0])
+        self.assertIn("regex", commands[0])
+        self.assertIn("tqdm", commands[0])
+        self.assertIn("--no-build-isolation", commands[1])
+        self.assertIn("--no-deps", commands[1])
+        self.assertIn(studio.A1111_CLIP_URL, commands[1])
+        self.assertFalse(any("torch" in str(x) for cmd in commands for x in cmd))
+
+    def test_clip_preinstall_reuses_existing_distribution(self):
+        from unittest.mock import MagicMock
+        with patch.object(studio.subprocess, "run",
+                          return_value=MagicMock(returncode=0)) as probe, \
+             patch.object(studio, "run") as pip:
+            studio.ensure_a1111_clip(Path("/virtual/python"))
+        probe.assert_called_once()
+        pip.assert_not_called()
+
     def test_a1111_uses_python310_and_working_git_mirror(self):
         from unittest.mock import MagicMock
         with tempfile.TemporaryDirectory() as td:
