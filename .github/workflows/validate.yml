@@ -27,3 +27,9 @@ jobs:
           python -m pip install -q uv
           uv venv --seed --python 3.10 --managed-python /tmp/anime-studio-a1111-smoke
           /tmp/anime-studio-a1111-smoke/bin/python -c 'import sys,pip; assert sys.version_info[:2] == (3,10); print(sys.version)'
+      - name: Regression check - install legacy OpenAI CLIP under Python 3.10
+        run: |
+          PY=/tmp/anime-studio-a1111-smoke/bin/python
+          "$PY" -m pip install 'setuptools==69.5.1' wheel ftfy regex tqdm
+          "$PY" -m pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip
+          "$PY" -c 'import pkg_resources,importlib.metadata as m; assert m.version("clip") == "1.0"; print("CLIP installed:", m.version("clip"))'
