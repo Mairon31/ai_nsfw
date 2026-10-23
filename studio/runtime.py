@@ -149,6 +149,7 @@ def launch_worker(config: dict, secrets: dict[str, str]) -> int:
     LOG.write_text(f"Anime Colab Studio | sesión iniciada {utc_now()}\n", encoding="utf-8")
     stage("preparing", "Preparando la ejecución...")
     env = os.environ.copy()
+    env["ANIME_STUDIO_WORKER"] = "1"
     # Temporary child environment only, never written to disk.
     env.update({k: v for k, v in secrets.items() if v})
     with LOG.open("ab", buffering=0) as writer:
@@ -243,6 +244,7 @@ def launch_foreground(config: dict, secrets: dict[str, str]) -> int:
     LOG.write_text(f"Anime Colab Studio | modo directo {utc_now()}\n", encoding="utf-8")
     stage("preparing", "Modo directo: lanzando proceso supervisado en esta celda...")
     env = os.environ.copy()
+    env["ANIME_STUDIO_WORKER"] = "1"
     env.update({key: val for key, val in secrets.items() if val})
     command = [sys.executable, "-u", str(REPO_ROOT / "studio" / "worker.py")]
     proc = subprocess.Popen(
