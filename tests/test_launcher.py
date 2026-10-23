@@ -130,6 +130,19 @@ class StudioTests(unittest.TestCase):
                     out = runtime.snapshot()
                     self.assertEqual(out["stage"], "stalled")
 
+    def test_repair_a1111_partial_dependency_clone_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            app = Path(td)
+            broken = app / "repositories" / "stable-diffusion-stability-ai"
+            broken.mkdir(parents=True)
+            (broken / "incomplete.txt").write_text("git clone failed")
+            preserved = app / "models" / "Stable-diffusion" / "checkpoint.safetensors"
+            preserved.parent.mkdir(parents=True)
+            preserved.write_bytes(b"preserve")
+            studio.repair_a1111_stable_diffusion_clone(app)
+            self.assertFalse(broken.exists())
+            self.assertEqual(preserved.read_bytes(), b"preserve")
+
     def test_a1111_uses_python310_and_working_git_mirror(self):
         from unittest.mock import MagicMock
         with tempfile.TemporaryDirectory() as td:
