@@ -24,6 +24,21 @@ Además, Colab puede utilizar Python 3.13, mientras que A1111 depende de paquete
 
 Esta solución incluye una prueba de regresión que revisa el ejecutable Python utilizado, la URL del clon y las variables de entorno. Esa prueba de CI **no sustituye una ejecución completa de inferencia en GPU**.
 
+## Solución de CLIP: error al generar wheel (octubre de 2026)
+
+En AUTOMATIC1111 v1.10.1 el paquete `openai/CLIP` tiene un `setup.py` antiguo que importa `pkg_resources`. En los entornos de compilación modernos, `setuptools` puede omitir ese módulo; como resultado se ve `Couldn't install clip`, `Getting requirements to build wheel` y `Error code: 1`. **No es un error del checkpoint WAI ni del túnel.**
+
+Anime Colab Studio ahora, antes de iniciar AUTOMATIC1111:
+
+1. Reutiliza el Python 3.10 aislado, sin modificar el Python del runtime.
+2. Instala `setuptools==69.5.1`, `wheel` y las dependencias pequeñas de CLIP en ese mismo entorno.
+3. Instala el commit de CLIP requerido por A1111 usando `pip --no-build-isolation --no-deps`, para evitar que pip cree otro entorno con `setuptools` incompatible.
+4. Confirma que la distribución `clip` quedó instalada para que A1111 omita el paso antiguo de instalación. PyTorch y CUDA siguen siendo responsabilidad de A1111.
+
+**Prueba de regresión:** GitHub Actions realiza una instalación real de CLIP en Python 3.10 y comprueba `pkg_resources` y la versión de la distribución `clip`. Esto verifica el error concreto, no el arranque completo con GPU en Colab.
+
+Tras corregir este error en GitHub, vuelve a ejecutar la **celda 2** para descargar el código actualizado y reintenta con el botón de inicio. Los modelos que ya se descargaron a Drive siguen disponibles. Si el runtime quedó en un estado inesperado, reinícialo y vuelve a abrir el notebook actualizado.
+
 ## Si Colab se queda en «Preparando»
 
 **La marca verde de la celda 2 es normal**: el dashboard termina de dibujarse y la instalación sigue en otro proceso. Si no ves cambios, ejecuta la **celda 3: Diagnóstico**, que muestra estado, PID y registros directamente, sin depender de las actualizaciones del widget.
