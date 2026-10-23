@@ -99,11 +99,16 @@ def install_ui(ui_name: str) -> Path:
     if ui_name == "ComfyUI":
         path = ROOT / "ComfyUI"
         if not (path / "main.py").exists():
+            # A cancelled git clone may leave an incomplete non-empty directory.
+            if path.exists():
+                shutil.rmtree(path)
             run(["git", "clone", "--depth", "1", "https://github.com/Comfy-Org/ComfyUI.git", str(path)])
         run([sys.executable, "-m", "pip", "install", "-q", "-r", str(path / "requirements.txt")])
     else:
         path = ROOT / "stable-diffusion-webui"
         if not (path / "launch.py").exists():
+            if path.exists():
+                shutil.rmtree(path)
             run(["git", "clone", "--depth", "1", "https://github.com/AUTOMATIC1111/stable-diffusion-webui.git", str(path)])
     return path
 
@@ -371,22 +376,36 @@ def launch_tunnel(tunnel: str, port: int, email: str) -> str:
     logfile = LOCAL_ROOT / "tunnel.log"
     if tunnel == "Cloudflare":
         executable = ROOT / "cloudflared"
+        if executable.exists() and executable.stat().st_size < 5_000_000:
+            executable.unlink()
         if not executable.exists():
             res = requests.get("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", timeout=90)
             res.raise_for_status()
-            executable.write_bytes(res.content)
-            executable.chmod(0o755)
+            part = executable.with_suffix(".download")
+            part.write_bytes(res.content)
+            if part.stat().st_size < 5_000_000:
+                part.unlink(missing_ok=True)
+                raise RuntimeError("Descarga incompleta de cloudflared.")
+            part.chmod(0o755)
+            part.replace(executable)
         command = [str(executable), "--no-autoupdate", "tunnel", "--url", f"http://127.0.0.1:{port}", "--allowed-mail", email]
     else:
         token = secret("NGROK_AUTHTOKEN")
         if not token:
             raise ValueError("Configura NGROK_AUTHTOKEN en el panel de Secretos de Colab.")
         executable = ROOT / "ngrok"
+        if executable.exists() and executable.stat().st_size < 3_000_000:
+            executable.unlink()
         if not executable.exists():
             archive = ROOT / "ngrok.tar.gz"
             response = requests.get("https://bin.ngrok.com/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz", timeout=90)
             response.raise_for_status()
-            archive.write_bytes(response.content)
+            temporary = archive.with_suffix(".download")
+            temporary.write_bytes(response.content)
+            if temporary.stat().st_size < 1_000_000:
+                temporary.unlink(missing_ok=True)
+                raise RuntimeError("Descarga incompleta de ngrok.")
+            temporary.replace(archive)
             run(["tar", "-xzf", str(archive), "-C", str(ROOT)])
             executable.chmod(0o755)
         # ngrok reads NGROK_AUTHTOKEN from the temporary worker environment;
