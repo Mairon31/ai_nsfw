@@ -79,12 +79,27 @@ class StudioTests(unittest.TestCase):
             self.assertEqual(config["samples_format"], "png")
             self.assertIn("Drive", config["outdir_txt2img_samples"])
 
+
+    def test_runtime_status_and_log_visibility(self):
+        from studio import runtime
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with patch.object(runtime, "STATUS", root / "status.json"):
+                with patch.object(runtime, "LOG", root / "runtime.log"):
+                    runtime.stage("installing", "Descargando dependencias")
+                    current = runtime.read_json(runtime.STATUS)
+                    self.assertEqual(current["stage"], "installing")
+                    self.assertEqual(current["percent"], 18)
+                    runtime.LOG.write_text("checking GPU\\npip install started\\n")
+                    self.assertIn("pip install", runtime.recent_log())
+                    self.assertIn("pip install", runtime.render_log())
+
     def test_notebook_parse_and_entrypoint(self):
         nb = json.loads((PATH.parent.parent / "Anime_Studio_Colab.ipynb").read_text())
         self.assertEqual(nb["nbformat"], 4)
         cells = nb["cells"]
         self.assertEqual(len(cells), 3)
-        self.assertIn("studio/launcher.py", "".join(cells[2]["source"]))
+        self.assertIn("studio.dashboard", "".join(cells[2]["source"]))
         self.assertIn("enable_custom_widget_manager", "".join(cells[2]["source"]))
 
 
