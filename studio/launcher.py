@@ -406,8 +406,19 @@ def launch_tunnel(tunnel: str, port: int, email: str) -> str:
                 temporary.unlink(missing_ok=True)
                 raise RuntimeError("Descarga incompleta de ngrok.")
             temporary.replace(archive)
-            run(["tar", "-xzf", str(archive), "-C", str(ROOT)])
-            executable.chmod(0o755)
+            # Extract into a private staging folder to avoid leaving a partial
+            # executable if the user cancels during extraction.
+            staging = ROOT / "ngrok-install-partial"
+            if staging.exists():
+                shutil.rmtree(staging)
+            staging.mkdir(parents=True, exist_ok=True)
+            run(["tar", "-xzf", str(archive), "-C", str(staging)])
+            candidate = staging / "ngrok"
+            if not candidate.exists():
+                raise RuntimeError("El archivo descargado no contenía ngrok.")
+            candidate.chmod(0o755)
+            candidate.replace(executable)
+            shutil.rmtree(staging, ignore_errors=True)
         # ngrok reads NGROK_AUTHTOKEN from the temporary worker environment;
         # do not save this credential to a persistent config file.
         os.environ["NGROK_AUTHTOKEN"] = token
