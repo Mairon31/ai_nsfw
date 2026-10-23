@@ -337,6 +337,11 @@ def launch_ui(app: Path, config: dict, output_root: Path) -> tuple[int, Path]:
     with logfile.open("ab") as stream:
         proc = subprocess.Popen(args, cwd=str(app), env=env, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
     STATE["ui_process"] = proc
+    try:
+        from studio.runtime import save_pid
+        save_pid("server", proc.pid)
+    except ImportError:
+        pass
     return port, logfile
 
 def wait_for_http(port: int, proc: subprocess.Popen, log: Path, timeout: int = 600) -> None:
@@ -396,6 +401,11 @@ def launch_tunnel(tunnel: str, port: int, email: str) -> str:
     with logfile.open("wb") as stream:
         proc = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
     STATE["tunnel_process"] = proc
+    try:
+        from studio.runtime import save_pid
+        save_pid("tunnel", proc.pid)
+    except ImportError:
+        pass
     for _ in range(55):
         if proc.poll() is not None:
             raise RuntimeError(f"No se pudo abrir túnel:\n{tail(logfile)}")
