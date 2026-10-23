@@ -47,9 +47,10 @@ DEFAULTS = {
     "tunnel": "Cloudflare",
     "allowed_email": "",
     "save_to_drive": True,
-    "cache_models": False,
+    "cache_models": True,
     "loras": [],
     "custom_loras": "",
+    "adetailer": False,
     "profile": "Balanced",
 }
 STATE = {"ui_process": None, "tunnel_process": None}
@@ -321,7 +322,8 @@ def launch_ui(app: Path, config: dict, output_root: Path) -> tuple[int, Path]:
         (DRIVE_ROOT / "AnimeStudio-workflow.json").write_text(json.dumps(wf, ensure_ascii=False, indent=2))
     else:
         write_a1111_settings(app, output_root, config["profile"])
-        args = [sys.executable, "launch.py", "--listen", "--port", str(port), "--skip-python-version-check", "--skip-torch-cuda-test", "--no-download-sd-model"]
+        ckpt = model_dir(app, ui_name) / MODELS[config["model"]][1]
+        args = [sys.executable, "launch.py", "--listen", "--port", str(port), "--skip-python-version-check", "--skip-torch-cuda-test", "--no-download-sd-model", "--ckpt", str(ckpt)]
         password = secret("WEBUI_PASSWORD")
         if password:
             args += ["--gradio-auth", f"studio:{password}"]
@@ -428,6 +430,7 @@ def make_dashboard() -> None:
     email = widgets.Text(value=current["allowed_email"], description="Tu correo:", placeholder="usuario@gmail.com", layout=widgets.Layout(width="98%"), style={"description_width": "100px"})
     save_images = widgets.Checkbox(value=current["save_to_drive"], description="Guardar imágenes PNG automáticamente en Google Drive", indent=False)
     cache = widgets.Checkbox(value=current["cache_models"], description="Guardar modelos y LoRAs en Drive (requiere ~7 GB/modelo)", indent=False)
+    adetailer = widgets.Checkbox(value=current["adetailer"], description="Instalar ADetailer para AUTOMATIC1111 (caras y detalles)", indent=False)
     profile = widgets.Dropdown(options=["Balanced", "High quality", "Low VRAM"], value=current["profile"], description="Calidad:")
     choices = widgets.SelectMultiple(options=list(LORAS), value=tuple(v for v in current["loras"] if v in LORAS), description="LoRAs:", rows=5, layout=widgets.Layout(width="98%"), style={"description_width": "100px"})
     custom = widgets.Textarea(value=current["custom_loras"], description="Extra:", placeholder="Una URL https://... o hf://owner/repo/modelo.safetensors por línea", rows=3, layout=widgets.Layout(width="98%"), style={"description_width": "100px"})
@@ -444,6 +447,7 @@ def make_dashboard() -> None:
     def get_config():
         return {"model": model.value, "ui": ui.value, "tunnel": tunnel.value, "allowed_email": email.value.strip(),
                 "save_to_drive": bool(save_images.value), "cache_models": bool(cache.value), "profile": profile.value,
+                "adetailer": bool(adetailer.value),
                 "loras": list(choices.value), "custom_loras": custom.value.strip()}
     status = widgets.HTML("<b>Preparado.</b> Configura y pulsa Iniciar.")
     logs = widgets.Output(layout=widgets.Layout(border="1px solid #555", max_height="290px", overflow="auto"))
@@ -498,6 +502,11 @@ def make_dashboard() -> None:
                 safe_link(file, lora_dir(app, cfg["ui"]) / file.name)
                 installed.append(file.name)
             STATE["installed_loras"] = installed
+            if cfg["ui"] == "AUTOMATIC1111" and cfg["adetailer"]:
+                extension = app / "extensions" / "adetailer"
+                if not (extension / "scripts").exists():
+                    log("Instalando ADetailer...")
+                    run(["git", "clone", "--depth", "1", "https://github.com/Bing-su/adetailer.git", str(extension)])
             destination = (DRIVE_ROOT if cfg["save_to_drive"] else LOCAL_ROOT) / "outputs" / cfg["model"].replace(" ", "_")
             destination.mkdir(parents=True, exist_ok=True)
             stop_previous()
@@ -524,7 +533,7 @@ def make_dashboard() -> None:
         status.value = "<b>Iniciando...</b>"
         threading.Thread(target=job, daemon=True).start()
     start_button.on_click(start_click)
-    display(widgets.VBox([heading, model, ui, tunnel, email, profile, save_images, cache,
+    display(widgets.VBox([heading, model, ui, tunnel, email, profile, save_images, cache, adetailer,
                           widgets.HTML("<b>LoRAs preseleccionados (opcional)</b>"), choices,
                           widgets.HTML("<b>LoRAs personalizados (opcional)</b>"), custom, note,
                           widgets.HBox([save_button, start_button, stop_button]), status, logs]))
