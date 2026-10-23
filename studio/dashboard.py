@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import html
+import builtins
+from datetime import datetime, timezone
 import threading
 import time
 import traceback
@@ -29,8 +31,10 @@ def make_dashboard():
                                       value=values["ui"], description="Interfaz")
     tunnel = widgets.ToggleButtons(options=["Cloudflare", "ngrok", "Local only"],
                                    value=values["tunnel"], description="Túnel")
-    email = widgets.Text(value=values["allowed_email"], description="Tu correo",
-                         placeholder="correo@gmail.com", layout=layout, style=desc)
+    authentication = widgets.HTML(
+        "<small><b>Acceso remoto:</b> sin códigos de correo. El notebook mostrará "
+        "la contraseña de sesión al completar el inicio, o puedes configurar "
+        "WEBUI_PASSWORD en Secretos de Colab.</small>")
     quality = widgets.Dropdown(options=["Balanced", "High quality", "Low VRAM"],
                                value=values["profile"], description="Calidad", style=desc)
     save_images = widgets.Checkbox(
@@ -71,7 +75,8 @@ def make_dashboard():
         layout=widgets.Layout(width="98%"))
     status = widgets.HTML("<b>Preparado para iniciar.</b>")
     logs = widgets.HTML(runtime.render_log())
-    last = widgets.HTML(f"<small>Registro: <code>{runtime.LOG}</code> — se actualiza automáticamente.</small>")
+    refresh_info = widgets.HTML("<small>Para consultar el estado real utiliza Actualizar estado y logs o la celda 3.</small>")
+    last = widgets.HTML(f"<small>Registro: <code>{runtime.LOG}</code> · El diagnóstico de la celda 3 siempre lee el estado directamente del servidor.</small>")
     save_btn = widgets.Button(description="Guardar preferencias", icon="save")
     start_btn = widgets.Button(description="Instalar / iniciar", icon="play", button_style="success")
     stop_btn = widgets.Button(description="Detener / cancelar", icon="stop", button_style="warning")
@@ -85,7 +90,7 @@ def make_dashboard():
     def get_config():
         return {
             "model": model.value, "ui": interface.value, "tunnel": tunnel.value,
-            "allowed_email": email.value.strip(), "profile": quality.value,
+            "allowed_email": "", "profile": quality.value,
             "save_to_drive": bool(save_images.value),
             "cache_models": bool(cache.value),
             "adetailer": bool(detail.value),
@@ -99,24 +104,32 @@ def make_dashboard():
         progress.value = int(data.get("percent", 0))
         progress.bar_style = (
             "success" if stage == "ready" else "danger" if stage == "error"
-            else "warning" if stage == "stopped" else "info")
+            else "warning" if stage in {"stopped", "degraded"} else "info")
         message = html.escape(str(data.get("message", "Sin actividad.")))
         updated = html.escape(data.get("updated_at", ""))
         active = runtime.process_active()
         url = data.get("url")
         link = ""
-        if stage == "ready" and url:
+        if stage in {"ready", "degraded"} and url:
             safe_url = html.escape(str(url), quote=True)
             if str(url).startswith("https://"):
                 link = f'<p><a href="{safe_url}" target="_blank" rel="noopener"><b>Abrir Web UI</b></a></p>'
             else:
                 link = f"<p><code>{safe_url}</code></p>"
+            if data.get("password_source") == "generada" and data.get("access_password"):
+                link += ('<p><b>Contraseña de sesión:</b> <code>' +
+                         html.escape(str(data["access_password"])) + '</code></p>')
+            elif data.get("password_source") == "WEBUI_PASSWORD":
+                link += '<p>Contraseña: usa tu secreto WEBUI_PASSWORD de Colab.</p>'
         status.value = (f"<b>{message}</b>{link}"
                         f"<small>Etapa: {html.escape(stage)}"
                         f" · Último cambio: {updated or 'sin datos'}</small>")
         start_btn.disabled = active
         stop_btn.disabled = not active
         logs.value = runtime.render_log(50)
+        refresh_info.value = ('<small>Consulta realizada: ' +
+                              html.escape(datetime.now(timezone.utc).strftime('%H:%M:%S UTC')) +
+                              '. Si Colab no refleja los cambios, ejecuta la celda 3.</small>')
 
     def save_click(_):
         try:
@@ -150,16 +163,26 @@ def make_dashboard():
             update_display()
     stop_btn.on_click(stop_click)
 
-    refresh_btn.on_click(lambda _: update_display())
+    def refresh_click(_):
+        update_display()
+    refresh_btn.on_click(refresh_click)
 
-    display(widgets.VBox([
-        title, model, interface, tunnel, email, quality, save_images, cache, detail,
+    root = widgets.VBox([
+        title, model, interface, tunnel, authentication, quality, save_images, cache, detail,
         widgets.HTML("<b>LoRAs opcionales</b>"), choices,
         widgets.HTML("<b>LoRAs personalizados (uno por línea)</b>"),
         custom, compatible_note,
         widgets.HBox([save_btn, start_btn, stop_btn, refresh_btn]),
-        status, progress, last, logs, help_text,
-    ]))
+        status, progress, refresh_info, last, logs, help_text,
+    ])
+    previous = getattr(builtins, "_anime_studio_dashboard", None)
+    if previous is not None:
+        try:
+            previous.close()
+        except Exception:
+            pass
+    builtins._anime_studio_dashboard = root
+    display(root)
 
     def poll():
         # ipywidgets updates may be throttled on some Colab frontends.
