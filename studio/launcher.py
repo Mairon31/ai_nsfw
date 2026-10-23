@@ -139,6 +139,26 @@ def ensure_a1111_python() -> Path:
     return interpreter
 
 
+def repair_a1111_stable_diffusion_clone(app: Path) -> None:
+    """Remove only a corrupt/incomplete dependency clone, never model caches.
+
+    This repairs Git error 128 from old installations without touching any
+    checkpoints, extensions, LoRAs or user data.
+    """
+    dependency = app / "repositories" / "stable-diffusion-stability-ai"
+    if not dependency.exists():
+        return
+    if not (dependency / ".git").exists():
+        print("AUTOMATIC1111: eliminando clon incompleto de Stable Diffusion.", flush=True)
+        shutil.rmtree(dependency)
+        return
+    check = subprocess.run(["git", "-C", str(dependency), "rev-parse", "--verify", "HEAD"],
+                           capture_output=True, text=True)
+    if check.returncode:
+        print("AUTOMATIC1111: reparando repositorio Git incompleto de Stable Diffusion.", flush=True)
+        shutil.rmtree(dependency)
+
+
 def install_ui(ui_name: str) -> Path:
     if ui_name == "ComfyUI":
         path = ROOT / "ComfyUI"
@@ -155,6 +175,7 @@ def install_ui(ui_name: str) -> Path:
             if path.exists():
                 shutil.rmtree(path)
             run(["git", "clone", "--depth", "1", "https://github.com/AUTOMATIC1111/stable-diffusion-webui.git", str(path)])
+        repair_a1111_stable_diffusion_clone(path)
     return path
 
 def model_dir(app: Path, ui_name: str) -> Path:
