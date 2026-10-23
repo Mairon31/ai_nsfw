@@ -191,6 +191,7 @@ class StudioTests(unittest.TestCase):
                  patch.object(studio, "write_a1111_settings"), \
                  patch.object(studio, "secret", return_value=""), \
                  patch.object(studio.subprocess, "Popen", return_value=proc) as popen, \
+                 patch.dict("os.environ", {"MPLBACKEND": "module://matplotlib_inline.backend_inline"}), \
                  patch("studio.runtime.save_pid"):
                 port, log = studio.launch_ui(app, configured, root / "outputs")
             self.assertEqual(port, 7860)
@@ -206,6 +207,9 @@ class StudioTests(unittest.TestCase):
             self.assertEqual(env["VENV_DIR"], "-")
             self.assertEqual(env["VIRTUAL_ENV"], str(interpreter.parents[1]))
             self.assertEqual(env["GIT_TERMINAL_PROMPT"], "0")
+            self.assertEqual(env["MPLBACKEND"], "Agg")
+            # Do not edit the notebook's environment, only the A1111 process.
+            self.assertNotEqual(env["MPLBACKEND"], "module://matplotlib_inline.backend_inline")
             self.assertTrue(env["PATH"].startswith(str(interpreter.parent)))
 
     def test_python310_setup_uses_uv_managed_interpreter(self):
