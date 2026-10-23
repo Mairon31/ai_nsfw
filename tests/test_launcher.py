@@ -262,15 +262,48 @@ class StudioTests(unittest.TestCase):
             self.assertEqual(chosen, interpreter)
             self.assertEqual(commands[0][:6], ["/usr/bin/uv", "venv", "--seed", "--python", "3.10", "--managed-python"])
 
+    def test_monitor_session_without_running_server_exits(self):
+        from studio import runtime
+        with patch.object(runtime, "process_active", return_value=False):
+            result = __import__("asyncio").run(
+                runtime.monitor_active_session_async(interval=10, max_checks=2, check_api=False))
+        self.assertEqual(result, "not_running")
+
+    def test_monitor_active_server_with_bounded_checks(self):
+        import asyncio
+        from studio import runtime
+        with patch.object(runtime, "snapshot", return_value={
+            "stage": "ready", "url": "https://example.test",
+            "output_dir": "/tmp/outputs", "message": "Servidor activo"
+        }), patch.object(runtime, "process_active", return_value=True), \
+             patch.object(runtime, "read_json", return_value={"ui": "AUTOMATIC1111"}), \
+             patch.object(asyncio, "sleep", new_callable=__import__("unittest").mock.AsyncMock):
+            result = asyncio.run(runtime.monitor_active_session_async(
+                interval=10, max_checks=2, check_api=False))
+        self.assertEqual(result, "ready")
+
+    def test_monitor_during_installation_continues_instead_of_exiting(self):
+        import asyncio
+        from studio import runtime
+        with patch.object(runtime, "snapshot", return_value={
+            "stage": "installing", "message": "Descargando dependencias"
+        }), patch.object(runtime, "process_active", return_value=True), \
+             patch.object(asyncio, "sleep", new_callable=__import__("unittest").mock.AsyncMock):
+            result = asyncio.run(runtime.monitor_active_session_async(
+                interval=10, max_checks=2, check_api=False))
+        self.assertEqual(result, "installing")
+
+
     def test_notebook_parse_and_entrypoint(self):
         nb = json.loads((PATH.parent.parent / "Anime_Studio_Colab.ipynb").read_text())
         self.assertEqual(nb["nbformat"], 4)
         cells = nb["cells"]
-        self.assertEqual(len(cells), 6)
+        self.assertEqual(len(cells), 8)
         self.assertIn("studio.dashboard", "".join(cells[2]["source"]))
         self.assertIn("enable_custom_widget_manager", "".join(cells[2]["source"]))
         self.assertIn("runtime.recent_log", "".join(cells[3]["source"]))
         self.assertIn("launch_foreground", "".join(cells[5]["source"]))
+        self.assertIn("monitor_active_session_async", "".join(cells[7]["source"]))
 
 
 if __name__ == "__main__":
