@@ -134,10 +134,11 @@ class StudioTests(unittest.TestCase):
         nb = json.loads((PATH.parent.parent / "Anime_Studio_Colab.ipynb").read_text())
         self.assertEqual(nb["nbformat"], 4)
         cells = nb["cells"]
-        self.assertEqual(len(cells), 4)
+        self.assertEqual(len(cells), 6)
         self.assertIn("studio.dashboard", "".join(cells[2]["source"]))
         self.assertIn("enable_custom_widget_manager", "".join(cells[2]["source"]))
         self.assertIn("runtime.recent_log", "".join(cells[3]["source"]))
+        self.assertIn("launch_foreground", "".join(cells[5]["source"]))
 
 
 if __name__ == "__main__":
