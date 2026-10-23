@@ -476,18 +476,20 @@ def launch_ui(app: Path, config: dict, output_root: Path) -> tuple[int, Path]:
         pass
     return port, logfile
 
-def wait_for_http(port: int, proc: subprocess.Popen, log: Path, timeout: int = 600) -> None:
+def wait_for_http(port: int, proc: subprocess.Popen, log: Path, timeout: int = 600, ui_name: str = "ComfyUI") -> None:
+    """Wait for the engine's API, not just Gradio's early HTML shell."""
+    endpoint = "/sdapi/v1/options" if ui_name == "AUTOMATIC1111" else "/system_stats"
     for _ in range(timeout // 3):
         if proc.poll() is not None:
             raise RuntimeError(f"Web UI terminó antes de iniciar. Últimas líneas:\n{tail(log)}")
         try:
-            response = requests.get(f"http://127.0.0.1:{port}/", timeout=3)
-            if response.status_code < 500:
+            response = requests.get(f"http://127.0.0.1:{port}{endpoint}", timeout=3)
+            if response.status_code == 200 and isinstance(response.json(), dict):
                 return
-        except requests.RequestException:
+        except (requests.RequestException, ValueError):
             pass
         time.sleep(3)
-    raise TimeoutError(f"Web UI no respondió. Registro:\n{tail(log)}")
+    raise TimeoutError(f"La API de {ui_name} no respondió en {endpoint}. Registro:\n{tail(log)}")
 
 def tail(path: Path, lines: int = 24) -> str:
     try:
@@ -620,7 +622,7 @@ def launch_access_proxy(origin_port: int, password: str) -> tuple[int, Path]:
     raise TimeoutError("Proxy de autenticación no respondió: " + tail(proxy_log))
 
 
-def verify_tunnel_public_url(url: str, password: str, retries: int = 10) -> bool:
+def verify_tunnel_public_url(url: str, password: str, retries: int = 10, ui_name: str = "ComfyUI") -> bool:
     """Require the edge to reach OUR login proxy before claiming readiness."""
     if not url.startswith("https://"):
         return False
@@ -641,7 +643,12 @@ def verify_tunnel_public_url(url: str, password: str, retries: int = 10) -> bool
                     time.sleep(3)
                     continue
                 authenticated = client.get(url + "/", timeout=12)
-                if authenticated.status_code == 200 and "text/html" in authenticated.headers.get("Content-Type", ""):
+                if authenticated.status_code != 200 or "text/html" not in authenticated.headers.get("Content-Type", ""):
+                    time.sleep(3)
+                    continue
+                api_path = "/sdapi/v1/options" if ui_name == "AUTOMATIC1111" else "/system_stats"
+                api = client.get(url + api_path, timeout=12)
+                if api.status_code == 200 and isinstance(api.json(), dict):
                     return True
         except (requests.RequestException, ValueError):
             pass
