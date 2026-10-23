@@ -175,6 +175,36 @@ class StudioTests(unittest.TestCase):
         probe.assert_called_once()
         pip.assert_not_called()
 
+    def test_cloudflare_tunnel_accepts_two_arguments_and_requires_no_email(self):
+        from unittest.mock import MagicMock
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            binary = root / "cloudflared"
+            with binary.open("wb") as handle:
+                handle.truncate(6_000_000)
+            binary.chmod(0o755)
+            tunnel_url = "https://working-test.trycloudflare.com"
+            def fake_popen(command, **kwargs):
+                kwargs["stdout"].write(
+                    ("Quick tunnel created: " + tunnel_url + "\\n").encode()
+                )
+                kwargs["stdout"].flush()
+                return MagicMock(pid=12345, poll=lambda: None)
+
+            with patch.object(studio, "ROOT", root), \
+                 patch.object(studio, "LOCAL_ROOT", root), \
+                 patch.object(studio.subprocess, "Popen", side_effect=fake_popen) as popen, \
+                 patch("studio.runtime.save_pid"):
+                result = studio.launch_tunnel("Cloudflare", 8787)
+            self.assertEqual(result, tunnel_url)
+            cmd = popen.call_args.args[0]
+            self.assertEqual(cmd[-2:], ["--url", "http://127.0.0.1:8787"])
+            self.assertNotIn("--allowed-mail", cmd)
+            self.assertNotIn("oauth", " ".join(cmd).lower())
+
+    def test_local_tunnel_still_works_without_email(self):
+        self.assertIn("127.0.0.1:8188", studio.launch_tunnel("Local only", 8188))
+
     def test_a1111_uses_python310_and_working_git_mirror(self):
         from unittest.mock import MagicMock
         with tempfile.TemporaryDirectory() as td:
