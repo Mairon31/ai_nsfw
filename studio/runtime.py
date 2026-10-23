@@ -250,8 +250,8 @@ def monitor_active_session(interval: int = 20, *, max_checks: int | None = None,
     interval = max(10, min(120, int(interval)))
     status = snapshot()
     stage_name = status.get("stage", "idle")
-    if not process_active() or stage_name not in {"ready", "degraded"}:
-        message = "No hay un servidor listo para supervisar. Inícialo primero en la celda 2."
+    if not process_active() or stage_name in {"idle", "stopped", "error", "stalled"}:
+        message = "No hay una instalación o servidor activo. Pulsa Instalar / iniciar en la celda 2 primero."
         print(message, flush=True)
         return "not_running"
 
@@ -275,8 +275,15 @@ def monitor_active_session(interval: int = 20, *, max_checks: int | None = None,
             return state if state in {"error", "stopped", "stalled"} else "not_running"
 
         if state not in {"ready", "degraded"}:
-            print("SUPERVISIÓN FINALIZADA | Estado inesperado: " + str(state), flush=True)
-            return str(state)
+            if state != last_stage or checks % max(1, 60 // interval) == 0:
+                print(f"[{utc_now()}] Preparando el servidor | etapa={state} | "
+                      f"{status.get('message', '')}", flush=True)
+            last_stage = state
+            checks += 1
+            if max_checks is not None and checks >= max_checks:
+                return state
+            time.sleep(interval)
+            continue
 
         data = read_json(CONFIG)
         mode = data.get("ui", status.get("ui", "ComfyUI"))
@@ -310,6 +317,86 @@ def monitor_active_session(interval: int = 20, *, max_checks: int | None = None,
         if max_checks is not None and checks >= max_checks:
             return state
         time.sleep(interval)
+
+
+
+async def monitor_active_session_async(
+    interval: int = 20, *, max_checks: int | None = None, check_api: bool = True
+) -> str:
+    """Monitor real server activity without blocking Jupyter's widget event loop.
+
+    Intended for the notebook monitoring cell. A running cell is useful for
+    real work but does not override Colab resource/usage limits.
+    """
+    import asyncio
+    import urllib.request
+    import urllib.error
+
+    interval = max(10, min(120, int(interval)))
+    current = snapshot()
+    if not process_active() or current.get("stage") in {"idle", "stopped", "error", "stalled"}:
+        print("No hay instalación ni servidor activo. Pulsa Instalar / iniciar antes de ejecutar esta celda.", flush=True)
+        return "not_running"
+
+    print("MONITOR DE SESIÓN ACTIVO | La celda seguirá ejecutándose mientras el trabajo continúe.", flush=True)
+    print("Puedes continuar usando la Web UI y los botones de la celda 2.", flush=True)
+    print("Detener esta celda cancela solamente el monitor; no apaga el servidor.", flush=True)
+    print("Los límites de tiempo, GPU y unidades de Colab siguen vigentes.", flush=True)
+
+    checks, api_failures, last_stage = 0, 0, None
+    first_ready_reported = False
+    try:
+        while True:
+            current = snapshot()
+            state = current.get("stage", "idle")
+            if state in {"error", "stopped", "stalled"} or not process_active():
+                print("MONITOR FINALIZADO: " + current.get("message", str(state)), flush=True)
+                print(recent_log(15), flush=True)
+                return str(state)
+
+            if state not in {"ready", "degraded"}:
+                if last_stage != state or checks % max(1, 60 // interval) == 0:
+                    print(f"[{utc_now()}] Instalación en curso: {state} | "
+                          + str(current.get("message", "")), flush=True)
+            else:
+                if not first_ready_reported:
+                    first_ready_reported = True
+                    if current.get("url"):
+                        print("Interfaz: " + str(current["url"]), flush=True)
+                    if current.get("output_dir"):
+                        print("Archivos: " + str(current["output_dir"]), flush=True)
+                    print("Contraseña remota: consulta el panel de la celda 2 o el diagnóstico de la celda 3.", flush=True)
+
+                api_result = "no comprobada"
+                if check_api:
+                    cfg = read_json(CONFIG)
+                    ui = cfg.get("ui", current.get("ui", "ComfyUI"))
+                    port = 7860 if ui == "AUTOMATIC1111" else 8188
+                    endpoint = "/sdapi/v1/options" if ui == "AUTOMATIC1111" else "/system_stats"
+                    def probe():
+                        try:
+                            with urllib.request.urlopen(
+                                f"http://127.0.0.1:{port}{endpoint}", timeout=4
+                            ) as response:
+                                return "OK" if response.status == 200 else f"HTTP {response.status}"
+                        except (OSError, ValueError) as exc:
+                            return type(exc).__name__
+                    api_result = await asyncio.to_thread(probe)
+                    api_failures = 0 if api_result == "OK" else api_failures + 1
+                if last_stage != state or checks % max(1, 60 // interval) == 0 or api_failures == 3:
+                    print(f"[{utc_now()}] Web UI: {state} | API: {api_result} | "
+                          f"revisiones: {checks + 1}", flush=True)
+                    if api_failures == 3:
+                        print("API no respondió en tres revisiones. Podría estar ocupada generando; consulta los logs.", flush=True)
+
+            last_stage = state
+            checks += 1
+            if max_checks is not None and checks >= max_checks:
+                return str(state)
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        print("Monitor cancelado. La Web UI y el túnel pueden continuar ejecutándose.", flush=True)
+        raise
 
 
 def launch_foreground(config: dict, secrets: dict[str, str]) -> int:
