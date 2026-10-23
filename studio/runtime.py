@@ -141,6 +141,9 @@ def launch_worker(config: dict, secrets: dict[str, str]) -> int:
     RUNTIME.mkdir(parents=True, exist_ok=True)
     atomic_json(PIDS, {})
     atomic_json(CONFIG, config)
+    atomic_json(STATUS, {})
+    for old_log in ("comfyui-server.log", "automatic1111-server.log", "tunnel.log"):
+        (RUNTIME / old_log).unlink(missing_ok=True)
     LOG.write_text(f"Anime Colab Studio | sesión iniciada {utc_now()}\n", encoding="utf-8")
     stage("preparing", "Preparando la ejecución...")
     env = os.environ.copy()
