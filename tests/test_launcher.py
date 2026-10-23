@@ -130,6 +130,59 @@ class StudioTests(unittest.TestCase):
                     out = runtime.snapshot()
                     self.assertEqual(out["stage"], "stalled")
 
+    def test_a1111_uses_python310_and_working_git_mirror(self):
+        from unittest.mock import MagicMock
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            app = root / "stable-diffusion-webui"
+            app.mkdir()
+            configured = {**studio.DEFAULTS, "ui": "AUTOMATIC1111", "model": "WAI-NSFW-Illustrious v12 (legacy)"}
+            interpreter = root / "a1111-venv" / "bin" / "python"
+            proc = MagicMock()
+            proc.pid = 34567
+            with patch.object(studio, "LOCAL_ROOT", root), \
+                 patch.object(studio, "A1111_PYTHON_DIR", interpreter.parents[1]), \
+                 patch.object(studio, "ensure_a1111_python", return_value=interpreter) as ensure, \
+                 patch.object(studio, "write_a1111_settings"), \
+                 patch.object(studio, "secret", return_value=""), \
+                 patch.object(studio.subprocess, "Popen", return_value=proc) as popen, \
+                 patch("studio.runtime.save_pid"):
+                port, log = studio.launch_ui(app, configured, root / "outputs")
+            self.assertEqual(port, 7860)
+            self.assertEqual(log.parent, root)
+            ensure.assert_called_once()
+            cmd = popen.call_args.args[0]
+            env = popen.call_args.kwargs["env"]
+            self.assertEqual(cmd[0], str(interpreter))
+            self.assertIn("launch.py", cmd)
+            self.assertNotIn("--skip-python-version-check", cmd)
+            self.assertNotIn("--skip-torch-cuda-test", cmd)
+            self.assertEqual(env["STABLE_DIFFUSION_REPO"], "https://github.com/w-e-w/stablediffusion.git")
+            self.assertEqual(env["VENV_DIR"], "-")
+            self.assertEqual(env["VIRTUAL_ENV"], str(interpreter.parents[1]))
+            self.assertEqual(env["GIT_TERMINAL_PROMPT"], "0")
+            self.assertTrue(env["PATH"].startswith(str(interpreter.parent)))
+
+    def test_python310_setup_uses_uv_managed_interpreter(self):
+        from unittest.mock import MagicMock
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            installed = root / "a1111-venv"
+            interpreter = installed / "bin" / "python"
+            commands = []
+            def fake_run(cmd, **kwargs):
+                commands.append(cmd)
+                if cmd[1] == "venv":
+                    interpreter.parent.mkdir(parents=True)
+                    interpreter.touch()
+            with patch.object(studio, "A1111_PYTHON_DIR", installed), \
+                 patch.object(studio.shutil, "which", return_value="/usr/bin/uv"), \
+                 patch.object(studio, "run", side_effect=fake_run), \
+                 patch.object(studio.subprocess, "run", return_value=MagicMock(returncode=0, stdout="Python 3.10.20", stderr="")):
+                chosen = studio.ensure_a1111_python()
+            self.assertEqual(chosen, interpreter)
+            self.assertEqual(commands[0][:6], ["/usr/bin/uv", "venv", "--seed", "--python", "3.10", "--managed-python"])
+
     def test_notebook_parse_and_entrypoint(self):
         nb = json.loads((PATH.parent.parent / "Anime_Studio_Colab.ipynb").read_text())
         self.assertEqual(nb["nbformat"], 4)
