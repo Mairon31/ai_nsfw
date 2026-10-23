@@ -18,3 +18,12 @@ jobs:
         run: python -m compileall -q studio tests
       - name: Run offline tests
         run: python -m unittest discover -s tests -v
+      - name: Verify upstream A1111 mirror is accessible
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: git ls-remote https://github.com/w-e-w/stablediffusion.git HEAD
+      - name: Verify isolated Python 3.10 can be provisioned
+        run: |
+          python -m pip install -q uv
+          uv venv --seed --python 3.10 --managed-python /tmp/anime-studio-a1111-smoke
+          /tmp/anime-studio-a1111-smoke/bin/python -c 'import sys,pip; assert sys.version_info[:2] == (3,10); print(sys.version)'
