@@ -6,6 +6,7 @@ persisted in /content/AnimeColabStudio/runtime.log.
 from __future__ import annotations
 
 import os
+import secrets
 import sys
 import threading
 import time
@@ -107,18 +108,34 @@ def start():
     progress("server", f"Iniciando {cfg['ui']} (modelos cargándose en la GPU)...")
     port, app_log = launcher.launch_ui(app, cfg, destination)
     save_pid("server", launcher.STATE["ui_process"].pid)
-    launcher.wait_for_http(port, launcher.STATE["ui_process"], app_log, timeout=900)
-    progress("tunnel", f"Abriendo conexión {cfg['tunnel']}...")
-    try:
-        url = launcher.launch_tunnel(cfg["tunnel"], port, cfg.get("allowed_email", "").strip())
-    finally:
-        tunnel = launcher.STATE.get("tunnel_process")
-        if tunnel is not None:
-            save_pid("tunnel", tunnel.pid)
-    progress("ready", f"Listo: {cfg['ui']} conectado. Revisa URL de acceso.")
-    stage("ready", "Servidor activo y acceso remoto listo.", url=url, output_dir=str(destination),
-          model=cfg["model"], ui=cfg["ui"], loras=installed)
+    launcher.wait_for_http(port, launcher.STATE["ui_process"], app_log, timeout=900, ui_name=cfg["ui"])
+    password = ""
+    source = ""
+    verified = True
+    if cfg["tunnel"] != "Local only":
+        progress("proxy", "Preparando acceso con contraseña de sesión (sin código de correo)...")
+        source = "WEBUI_PASSWORD" if launcher.secret("WEBUI_PASSWORD") else "generada"
+        password = launcher.secret("WEBUI_PASSWORD") or secrets.token_urlsafe(16)
+        proxy_port, proxy_log = launcher.launch_access_proxy(port, password)
+        progress("tunnel", f"Abriendo conexión {cfg['tunnel']} sin autenticación por correo...")
+        url = launcher.launch_tunnel(cfg["tunnel"], proxy_port)
+        progress("web_check", "Probando Web UI y sesión autenticada a través de la URL pública...")
+        verified = launcher.verify_tunnel_public_url(url, password, ui_name=cfg["ui"])
+    else:
+        url = f"http://127.0.0.1:{port} (solo desde Colab)"
+    final_stage = "ready" if verified else "degraded"
+    final_msg = ("Web UI y acceso externo autenticado comprobados."
+                 if verified else "Servidor iniciado, pero no se confirmó el acceso externo; revisa la URL y los registros.")
+    stage(final_stage, final_msg, url=url, output_dir=str(destination),
+          model=cfg["model"], ui=cfg["ui"], loras=installed,
+          access_password=password if source == "generada" else "",
+          password_source=source, tunnel_verified=verified)
     print(f"URL: {url}", flush=True)
+    if source == "generada":
+        print("Contraseña de sesión creada; se muestra en el panel de Colab y en la celda 3.", flush=True)
+    elif source == "WEBUI_PASSWORD":
+        print("Acceso con la contraseña guardada en el secreto WEBUI_PASSWORD de Colab.", flush=True)
+    print("Verificación externa: " + ("CORRECTA" if verified else "NO CONFIRMADA"), flush=True)
     print(f"Imágenes PNG: {destination}", flush=True)
     print("LoRAs instalados: " + (", ".join(installed) or "(ninguno)"), flush=True)
     CURRENT["busy"] = False
@@ -133,7 +150,7 @@ if __name__ == "__main__":
         print("\n" + traceback.format_exc(), flush=True)
         stage("error", f"{type(exc).__name__}: {exc}. Consulta el registro completo.")
         if launcher is not None:
-            for key in ("tunnel_process", "ui_process"):
+            for key in ("tunnel_process", "proxy_process", "ui_process"):
                 proc = launcher.STATE.get(key)
                 if proc and proc.poll() is None:
                     proc.terminate()
