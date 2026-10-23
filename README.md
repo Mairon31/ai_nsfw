@@ -24,6 +24,14 @@ Además, Colab puede utilizar Python 3.13, mientras que A1111 depende de paquete
 
 Esta solución incluye una prueba de regresión que revisa el ejecutable Python utilizado, la URL del clon y las variables de entorno. Esa prueba de CI **no sustituye una ejecución completa de inferencia en GPU**.
 
+## Solución de Matplotlib: `Key backend: module://matplotlib_inline.backend_inline`
+
+El runtime de Colab exporta `MPLBACKEND=module://matplotlib_inline.backend_inline` para mostrar gráficos en las celdas. Al heredar esa variable, **AUTOMATIC1111 en Python 3.10 aislado** puede fallar al importar `torchmetrics → matplotlib` con `ValueError: Key backend`.
+
+El lanzador establece `MPLBACKEND=Agg` **solo en los procesos secundarios** del instalador, AUTOMATIC1111 y ComfyUI, sin cambiar el backend ni los widgets del notebook. `Agg` permite dibujar imágenes en memoria sin interfaz gráfica de Matplotlib; **no afecta al tamaño o calidad de imágenes Stable Diffusion**.
+
+Para aplicar la corrección, vuelve a ejecutar la celda 2 (actualiza el código desde `master`) y usa **Detener / cancelar → Instalar / iniciar**. Si los widgets están desactualizados, reinicia el runtime y vuelve a ejecutar las dos primeras celdas. Las imágenes y checkpoints en Drive permanecen intactos. Revisa la celda 3 de diagnóstico si aparece otro error.
+
 ## Solución de CLIP: error al generar wheel (octubre de 2026)
 
 En AUTOMATIC1111 v1.10.1 el paquete `openai/CLIP` tiene un `setup.py` antiguo que importa `pkg_resources`. En los entornos de compilación modernos, `setuptools` puede omitir ese módulo; como resultado se ve `Couldn't install clip`, `Getting requirements to build wheel` y `Error code: 1`. **No es un error del checkpoint WAI ni del túnel.**
