@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import html
+import asyncio
 import builtins
 from datetime import datetime, timezone
-import threading
-import time
-import traceback
 
 import ipywidgets as widgets
 from IPython.display import display
@@ -184,14 +182,24 @@ def make_dashboard():
     builtins._anime_studio_dashboard = root
     display(root)
 
-    def poll():
-        # ipywidgets updates may be throttled on some Colab frontends.
-        # "Actualizar estado y logs" is always available as manual fallback.
+    async def poll():
+        # Colab widget state must be updated on the notebook's main asyncio
+        # loop, not from a background Python thread whose comm messages may
+        # never reach the frontend. The manual refresh button remains available.
         while True:
             try:
                 update_display()
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 pass
-            time.sleep(2)
-    threading.Thread(target=poll, daemon=True, name="anime-studio-monitor").start()
+            await asyncio.sleep(3)
+
+    old_task = getattr(builtins, "_anime_studio_poll_task", None)
+    if old_task is not None and not old_task.done():
+        old_task.cancel()
+    try:
+        builtins._anime_studio_poll_task = asyncio.get_running_loop().create_task(poll())
+    except RuntimeError:
+        builtins._anime_studio_poll_task = None
     update_display()
