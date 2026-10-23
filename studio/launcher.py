@@ -16,7 +16,7 @@ import requests
 # Deliberately lazy-load Colab/IPython/Hugging Face modules.
 # Importing notebook modules inside a detached worker can block at startup.
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 ROOT = Path("/content")
 DRIVE_MOUNT = ROOT / "drive"
 DRIVE_ROOT = DRIVE_MOUNT / "MyDrive" / "AnimeColabStudio"
@@ -57,6 +57,10 @@ def secret(name: str) -> str:
     value = (os.environ.get(name) or "").strip()
     if value:
         return value
+    # Detached Python workers cannot use notebook-only Colab user-data RPC.
+    # All secrets were already forwarded by the interactive dashboard.
+    if os.environ.get("ANIME_STUDIO_WORKER") == "1":
+        return ""
     try:
         from google.colab import userdata
         return (userdata.get(name) or "").strip()
