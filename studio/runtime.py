@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-RUNTIME = Path("/content/AnimeColabStudio")
+RUNTIME = Path(os.environ.get("ANIME_STUDIO_RUNTIME_DIR", "/content/AnimeColabStudio"))
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STATUS = RUNTIME / "runtime-status.json"
 PIDS = RUNTIME / "runtime-pids.json"
@@ -24,6 +24,7 @@ CONFIG = RUNTIME / "runtime-config.json"
 
 STAGES = {
     "preparing": 3,
+    "bootstrap": 5,
     "gpu": 7,
     "installing": 18,
     "model": 34,
@@ -33,6 +34,7 @@ STAGES = {
     "tunnel": 92,
     "ready": 100,
     "error": 0,
+    "stalled": 0,
     "stopped": 0,
 }
 
@@ -156,6 +158,13 @@ def launch_worker(config: dict, secrets: dict[str, str]) -> int:
             cwd=str(REPO_ROOT), env=env, start_new_session=True,
         )
     save_pid("worker", worker.pid)
+    # Let an immediately-failing interpreter leave a readable status/log instead
+    # of a dashboard that appears frozen forever.
+    time.sleep(0.35)
+    if worker.poll() is not None:
+        message = f"El instalador terminó inmediatamente (código {worker.returncode}). Consulta runtime.log."
+        stage("error", message)
+        raise RuntimeError(message)
     return worker.pid
 
 
@@ -168,7 +177,19 @@ def snapshot() -> dict:
         if not isinstance(pid, int) or not pid_alive(pid, markers=("main.py", "launch.py", "webui.py")):
             data.update(stage="error", message="El servidor terminó. Revisa los logs y pulsa Iniciar para reintentarlo.", percent=0)
             atomic_json(STATUS, data)
-    elif name not in {"error", "stopped"} and not process_active() and pids:
+    elif name == "preparing" and pids and process_active():
+        # A fresh worker should write its bootstrap stage almost immediately.
+        # Otherwise make the hang visible instead of showing endless 3%.
+        from datetime import datetime
+        try:
+            when = datetime.fromisoformat(data.get("updated_at", ""))
+            age = (datetime.now(timezone.utc) - when).total_seconds()
+        except (ValueError, TypeError):
+            age = 0
+        if age > 30:
+            data.update(stage="stalled", message="Worker bloqueado al arrancar (>30 s). Pulsa Detener y consulta logs.", percent=0)
+            atomic_json(STATUS, data)
+    elif name not in {"error", "stopped", "stalled"} and not process_active() and pids:
         data.update(stage="error", message="El proceso terminó inesperadamente. Consulta el registro.", percent=0)
         atomic_json(STATUS, data)
     return data
