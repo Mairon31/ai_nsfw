@@ -50,7 +50,7 @@ DEFAULTS = {
     "adetailer": False,
     "profile": "Balanced",
 }
-STATE = {"ui_process": None, "tunnel_process": None}
+STATE = {"ui_process": None, "tunnel_process": None, "proxy_process": None}
 
 def secret(name: str) -> str:
     """Read secrets from Colab in the notebook, or the temporary worker environment."""
@@ -443,9 +443,10 @@ def launch_ui(app: Path, config: dict, output_root: Path) -> tuple[int, Path]:
         ckpt = model_dir(app, ui_name) / MODELS[config["model"]][1]
         interpreter = ensure_a1111_python()
         args = [str(interpreter), "launch.py", "--port", str(port), "--no-download-sd-model", "--ckpt", str(ckpt)]
-        password = secret("WEBUI_PASSWORD")
-        if password:
-            args += ["--gradio-auth", f"studio:{password}"]
+        # Authentication is enforced at the dedicated tunnel proxy instead.
+        # Keeping --gradio-auth here would give API endpoints a second,
+        # inconsistent auth mechanism and cause Gradio Unauthorized errors.
+        args += ["--api"]
     env = os.environ.copy()
     # Colab exposes its notebook-only matplotlib_inline backend through
     # MPLBACKEND. Our external Web UI runs in a separate Python environment
@@ -497,8 +498,6 @@ def tail(path: Path, lines: int = 24) -> str:
 def launch_tunnel(tunnel: str, port: int, email: str) -> str:
     if tunnel == "Local only":
         return f"http://127.0.0.1:{port} (solo desde Colab)"
-    if not re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", email):
-        raise ValueError("Indica el correo autorizado para proteger el acceso remoto.")
     logfile = LOCAL_ROOT / "tunnel.log"
     if tunnel == "Cloudflare":
         executable = ROOT / "cloudflared"
@@ -514,7 +513,9 @@ def launch_tunnel(tunnel: str, port: int, email: str) -> str:
                 raise RuntimeError("Descarga incompleta de cloudflared.")
             part.chmod(0o755)
             part.replace(executable)
-        command = [str(executable), "--no-autoupdate", "tunnel", "--url", f"http://127.0.0.1:{port}", "--allowed-mail", email]
+        # The --allowed-mail OTP protection can expire mid-session and break
+        # Gradio XHR/WebSockets. The protected local proxy handles access.
+        command = [str(executable), "--no-autoupdate", "tunnel", "--url", f"http://127.0.0.1:{port}"]
     else:
         token = secret("NGROK_AUTHTOKEN")
         if not token:
@@ -548,12 +549,9 @@ def launch_tunnel(tunnel: str, port: int, email: str) -> str:
         # ngrok reads NGROK_AUTHTOKEN from the temporary worker environment;
         # do not save this credential to a persistent config file.
         os.environ["NGROK_AUTHTOKEN"] = token
-        policy = LOCAL_ROOT / "ngrok-policy.json"
-        policy.write_text(json.dumps({"on_http_request": [
-            {"actions": [{"type": "oauth", "config": {"provider": "google"}}]},
-            {"expressions": [f'actions.ngrok.oauth.identity.email != "{email}"'], "actions": [{"type": "deny"}]}
-        ]}))
-        command = [str(executable), "http", str(port), "--traffic-policy-file", str(policy)]
+        # No email/OAuth policy. Both tunnels point only to the authenticated
+        # local proxy, which uses a secure HTTP-only browser cookie.
+        command = [str(executable), "http", str(port)]
     with logfile.open("wb") as stream:
         proc = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
     STATE["tunnel_process"] = proc
@@ -581,8 +579,78 @@ def launch_tunnel(tunnel: str, port: int, email: str) -> str:
         time.sleep(2)
     raise TimeoutError(f"No se encontró URL pública:\n{tail(logfile)}")
 
+ACCESS_PROXY_PORT = 8787
+
+def launch_access_proxy(origin_port: int, password: str) -> tuple[int, Path]:
+    """Expose an authenticated proxy, never the actual Web UI, to the tunnel."""
+    proxy_script = Path(__file__).with_name("access_proxy.py")
+    proxy_log = LOCAL_ROOT / "access-proxy.log"
+    env = os.environ.copy()
+    env["ANIME_STUDIO_ORIGIN_PORT"] = str(origin_port)
+    env["ANIME_STUDIO_PROXY_PORT"] = str(ACCESS_PROXY_PORT)
+    env["ANIME_STUDIO_ACCESS_PASSWORD"] = password
+    env["MPLBACKEND"] = "Agg"
+    try:
+        check = subprocess.run([sys.executable, "-c", "import aiohttp"], capture_output=True, text=True)
+        if check.returncode:
+            print("Instalando aiohttp para proteger el acceso a Web UI...", flush=True)
+            run([sys.executable, "-m", "pip", "install", "-q", "aiohttp>=3.10,<4"])
+        with proxy_log.open("wb") as stream:
+            proc = subprocess.Popen(
+                [sys.executable, "-u", str(proxy_script)],
+                env=env, cwd=str(proxy_script.parent.parent), stdout=stream,
+                stderr=subprocess.STDOUT, start_new_session=True,
+            )
+    finally:
+        # The password is only passed in a child environment, not in a log.
+        env.pop("ANIME_STUDIO_ACCESS_PASSWORD", None)
+    STATE["proxy_process"] = proc
+    from studio.runtime import save_pid
+    save_pid("proxy", proc.pid)
+    for _ in range(60):
+        if proc.poll() is not None:
+            raise RuntimeError("Proxy de autenticación no inició: " + tail(proxy_log))
+        try:
+            response = requests.get(f"http://127.0.0.1:{ACCESS_PROXY_PORT}/__studio/health", timeout=2)
+            if response.status_code == 200 and response.json().get("service") == "anime-studio-proxy":
+                return ACCESS_PROXY_PORT, proxy_log
+        except (requests.RequestException, ValueError):
+            pass
+        time.sleep(1)
+    raise TimeoutError("Proxy de autenticación no respondió: " + tail(proxy_log))
+
+
+def verify_tunnel_public_url(url: str, password: str, retries: int = 10) -> bool:
+    """Require the edge to reach OUR login proxy before claiming readiness."""
+    if not url.startswith("https://"):
+        return False
+    for _ in range(retries):
+        try:
+            with requests.Session() as client:
+                health = client.get(url + "/__studio/health", timeout=6)
+                if health.status_code != 200 or health.json().get("service") != "anime-studio-proxy":
+                    time.sleep(3)
+                    continue
+                page = client.get(url + "/__studio/login", timeout=6)
+                if page.status_code != 200 or "Anime Colab Studio" not in page.text:
+                    time.sleep(3)
+                    continue
+                signed = client.post(url + "/__studio/login", data={"password": password},
+                                     allow_redirects=False, timeout=6)
+                if signed.status_code != 302 or "anime_studio_session=" not in signed.headers.get("Set-Cookie", ""):
+                    time.sleep(3)
+                    continue
+                authenticated = client.get(url + "/", timeout=12)
+                if authenticated.status_code == 200 and "text/html" in authenticated.headers.get("Content-Type", ""):
+                    return True
+        except (requests.RequestException, ValueError):
+            pass
+        time.sleep(3)
+    return False
+
+
 def stop_previous() -> None:
-    for key in ("tunnel_process", "ui_process"):
+    for key in ("tunnel_process", "proxy_process", "ui_process"):
         proc = STATE.get(key)
         if proc and proc.poll() is None:
             proc.terminate()
