@@ -15,6 +15,29 @@
 
 En ejecuciones posteriores los ajustes se cargan desde Google Drive. El botón **Guardar preferencias** permite actualizarlos sin iniciar una instalación.
 
+
+## Progreso visible, registros y cancelación
+
+La versión actual ejecuta las descargas, instalación e inicio en un **proceso supervisado**, separado del callback del widget. Ya no se queda mostrando únicamente “Iniciando...” ni bloquea el botón de reintento.
+
+- **Progreso:** fases GPU → instalación → checkpoint → LoRAs → servidor → túnel → listo.
+- **Actividad:** un mensaje de latido cada 12 segundos mientras siga en proceso.
+- **Logs:** panel integrado que se actualiza automáticamente y botón **Actualizar estado y logs** si Colab detiene las actualizaciones automáticas.
+- **Cancelar:** **Detener / cancelar** termina el instalador, la interfaz y el túnel cuando existan.
+- **Reintentar:** puedes volver a pulsar **Instalar / iniciar**, sin recrear el notebook. Los archivos descargados correctamente permanecen en Drive.
+- **Diagnóstico:** además del panel, los registros residen en \`/content/AnimeColabStudio/runtime.log\`, \`comfyui-server.log\` o \`automatic1111-server.log\`, y \`tunnel.log\`. Estado recuperable: \`/content/AnimeColabStudio/runtime-status.json\`.
+
+**Si tenías abierto el notebook antiguo:** el cambio de arquitectura requiere abrir de nuevo el notebook desde el enlace de Colab y reiniciar su entorno de ejecución. Después ejecuta las celdas. Los ajustes y PNG de Google Drive no se borran.
+
+Para mostrar manualmente el registro en una celda de Colab:
+
+~~~python
+from pathlib import Path
+print(Path("/content/AnimeColabStudio/runtime.log").read_text(errors="replace")[-10000:])
+~~~
+
+Nota: algunas instalaciones de modelos de ~7 GB, especialmente guardados directamente en Drive, pueden pasar bastante tiempo descargando o copiando datos. La fase y los latidos de actividad permiten distinguir esa espera de un bloqueo. No cierres el runtime durante la transferencia si quieres que finalice.
+
 ## Modelos disponibles
 
 | Modelo | Archivo/Origen | Familia |
