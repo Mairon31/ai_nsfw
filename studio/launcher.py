@@ -447,6 +447,11 @@ def launch_ui(app: Path, config: dict, output_root: Path) -> tuple[int, Path]:
         if password:
             args += ["--gradio-auth", f"studio:{password}"]
     env = os.environ.copy()
+    # Colab exposes its notebook-only matplotlib_inline backend through
+    # MPLBACKEND. Our external Web UI runs in a separate Python environment
+    # without matplotlib_inline, so always select the headless Agg backend.
+    # This changes only the child process, never the Colab notebook kernel.
+    env["MPLBACKEND"] = "Agg"
     if ui_name != "ComfyUI":
         env["VENV_DIR"] = "-"  # Already using isolated Python 3.10 venv.
         env["VIRTUAL_ENV"] = str(A1111_PYTHON_DIR)
@@ -459,6 +464,7 @@ def launch_ui(app: Path, config: dict, output_root: Path) -> tuple[int, Path]:
         env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
         print("AUTOMATIC1111: origen Stable Diffusion: " + env["STABLE_DIFFUSION_REPO"], flush=True)
         print("AUTOMATIC1111: intérprete aislado: " + str(args[0]), flush=True)
+        print("AUTOMATIC1111: Matplotlib backend for headless Web UI: " + env["MPLBACKEND"], flush=True)
     with logfile.open("ab") as stream:
         proc = subprocess.Popen(args, cwd=str(app), env=env, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
     STATE["ui_process"] = proc
