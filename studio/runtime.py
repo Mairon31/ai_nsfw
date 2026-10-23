@@ -235,6 +235,83 @@ def render_log(lines=40) -> str:
     return '<pre style="white-space:pre-wrap;max-height:300px;overflow-y:auto;background:#161a20;color:#e6edf3;padding:12px;border-radius:8px;font:12px/1.45 monospace">' + html.escape(recent_log(lines)) + "</pre>"
 
 
+
+def monitor_active_session(interval: int = 20, *, max_checks: int | None = None,
+                           check_api: bool = True) -> str:
+    """Keep the notebook cell running while an actual image server is alive.
+
+    This is not an artificial anti-idle browser action. It reports process/API
+    health and exits on stopped/crashed sessions. The platform may still reclaim
+    its VM due to resource limits, regardless of cell execution.
+    """
+    import urllib.error
+    import urllib.request
+
+    interval = max(10, min(120, int(interval)))
+    status = snapshot()
+    stage_name = status.get("stage", "idle")
+    if not process_active() or stage_name not in {"ready", "degraded"}:
+        message = "No hay un servidor listo para supervisar. Inícialo primero en la celda 2."
+        print(message, flush=True)
+        return "not_running"
+
+    print("SUPERVISIÓN ACTIVA. Esta celda permanecerá ejecutándose mientras el servidor esté disponible.", flush=True)
+    print("Pulsa el botón de detener ejecución de la celda para salir del monitor.", flush=True)
+    print("Colab mantiene sus propios límites de sesión y GPU; este monitor no puede modificarlos.", flush=True)
+    if status.get("url"):
+        print("Web UI: " + str(status["url"]), flush=True)
+    if status.get("output_dir"):
+        print("Imágenes: " + str(status["output_dir"]), flush=True)
+
+    checks = 0
+    consecutive_errors = 0
+    last_stage = None
+    while True:
+        status = snapshot()
+        state = status.get("stage", "idle")
+        if state in {"error", "stopped", "stalled"} or not process_active():
+            print("SUPERVISIÓN FINALIZADA | " + status.get("message", str(state)), flush=True)
+            print(recent_log(12), flush=True)
+            return state if state in {"error", "stopped", "stalled"} else "not_running"
+
+        if state not in {"ready", "degraded"}:
+            print("SUPERVISIÓN FINALIZADA | Estado inesperado: " + str(state), flush=True)
+            return str(state)
+
+        data = read_json(CONFIG)
+        mode = data.get("ui", status.get("ui", "ComfyUI"))
+        port = 7860 if mode == "AUTOMATIC1111" else 8188
+        endpoint = "/sdapi/v1/options" if mode == "AUTOMATIC1111" else "/system_stats"
+
+        api_result = "sin comprobar"
+        if check_api:
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}{endpoint}", timeout=4
+                ) as response:
+                    api_result = "OK" if response.status == 200 else f"HTTP {response.status}"
+            except (OSError, urllib.error.URLError, ValueError) as exc:
+                api_result = type(exc).__name__
+            if api_result == "OK":
+                consecutive_errors = 0
+            else:
+                consecutive_errors += 1
+
+        if state != last_stage or consecutive_errors == 3 or checks % max(1, 60 // interval) == 0:
+            print(f"[{utc_now()}] sesión={state} | servidor API={api_result} | "
+                  f"comprobaciones={checks + 1}", flush=True)
+            if consecutive_errors == 3:
+                print("ATENCIÓN: tres comprobaciones fallaron. "
+                      "Si estás generando imágenes, puede ser una respuesta tardía; "
+                      "consulta los logs antes de reiniciar.", flush=True)
+            last_stage = state
+
+        checks += 1
+        if max_checks is not None and checks >= max_checks:
+            return state
+        time.sleep(interval)
+
+
 def launch_foreground(config: dict, secrets: dict[str, str]) -> int:
     """Colab fallback: run the worker in an executing cell with streamed output.
 
@@ -275,6 +352,9 @@ def launch_foreground(config: dict, secrets: dict[str, str]) -> int:
         current = read_json(STATUS)
         if exit_code != 0 and current.get("stage") not in {"error", "stopped"}:
             stage("error", f"El worker terminó con código {exit_code}. Consulta los registros.")
+        elif exit_code == 0 and current.get("stage") in {"ready", "degraded"}:
+            print("Instalación terminada; manteniendo esta celda activa para supervisar el servidor.", flush=True)
+            monitor_active_session()
         return exit_code
     except KeyboardInterrupt:
         print("\nInterrupción solicitada. Cancelando worker, servidor y túnel...", flush=True)
