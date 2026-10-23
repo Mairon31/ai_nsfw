@@ -139,6 +139,46 @@ def ensure_a1111_python() -> Path:
     return interpreter
 
 
+A1111_CLIP_URL = "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
+A1111_SETUPTOOLS_VERSION = "69.5.1"
+
+
+def ensure_a1111_clip(interpreter: Path) -> None:
+    """Pre-install legacy OpenAI CLIP without PEP 517 build isolation.
+
+    The pinned CLIP setup.py imports pkg_resources, removed by recent
+    setuptools releases. Installing it inside a disposable isolated build
+    environment ignores our pinned setuptools and fails on modern Colab.
+    This does not install/downgrade torch; A1111 handles its GPU build.
+    """
+    verify = subprocess.run(
+        [str(interpreter), "-c",
+         'import importlib.metadata as md; md.version("clip"); import pkg_resources'],
+        capture_output=True, text=True,
+    )
+    if verify.returncode == 0:
+        print("AUTOMATIC1111: CLIP ya instalado; omitiendo recompilación.", flush=True)
+        return
+
+    print("AUTOMATIC1111: preparando setuptools compatible con CLIP antiguo...", flush=True)
+    run([str(interpreter), "-m", "pip", "install",
+         "--disable-pip-version-check", "--prefer-binary",
+         f"setuptools=={A1111_SETUPTOOLS_VERSION}", "wheel",
+         "ftfy", "regex", "tqdm"])
+
+    print("AUTOMATIC1111: instalando CLIP sin build isolation (sin alterar PyTorch)...", flush=True)
+    run([str(interpreter), "-m", "pip", "install", "--disable-pip-version-check",
+         "--no-build-isolation", "--no-deps", A1111_CLIP_URL])
+    result = subprocess.run(
+        [str(interpreter), "-c",
+         'import importlib.metadata as md; print("clip version:", md.version("clip")); import pkg_resources'],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("CLIP no quedó instalado correctamente: " + (result.stderr or result.stdout))
+    print("AUTOMATIC1111: " + result.stdout.strip(), flush=True)
+
+
 def repair_a1111_stable_diffusion_clone(app: Path) -> None:
     """Remove only a corrupt/incomplete dependency clone, never model caches.
 
@@ -169,7 +209,8 @@ def install_ui(ui_name: str) -> Path:
             run(["git", "clone", "--depth", "1", "https://github.com/Comfy-Org/ComfyUI.git", str(path)])
         run([sys.executable, "-m", "pip", "install", "-q", "-r", str(path / "requirements.txt")])
     else:
-        ensure_a1111_python()
+        python310 = ensure_a1111_python()
+        ensure_a1111_clip(python310)
         path = ROOT / "stable-diffusion-webui"
         if not (path / "launch.py").exists():
             if path.exists():
