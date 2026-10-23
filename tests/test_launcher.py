@@ -94,13 +94,50 @@ class StudioTests(unittest.TestCase):
                     self.assertIn("pip install", runtime.recent_log())
                     self.assertIn("pip install", runtime.render_log())
 
+
+    def test_detached_worker_bootstrap_reports_failure(self):
+        import os
+        import subprocess
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "runtime-config.json").write_text(json.dumps({
+                "model": "INVALID-MODEL", "ui": "ComfyUI", "tunnel": "Local only"
+            }))
+            env = dict(os.environ, ANIME_STUDIO_RUNTIME_DIR=str(root))
+            worker = Path(__file__).resolve().parents[1] / "studio" / "worker.py"
+            result = subprocess.run([sys.executable, "-u", str(worker)],
+                                    env=env, text=True, capture_output=True, timeout=35)
+            self.assertIn("[BOOT]", result.stdout)
+            self.assertIn("[BOOTSTRAP]", result.stdout)
+            status = json.loads((root / "runtime-status.json").read_text())
+            self.assertEqual(status["stage"], "error")
+            self.assertIn("Modelo desconocido", status["message"])
+
+    def test_stale_boot_detected(self):
+        from studio import runtime
+        from datetime import datetime, timezone, timedelta
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            state_file = root / "status.json"
+            pids_file = root / "pids.json"
+            state_file.write_text(json.dumps({
+                "stage": "preparing",
+                "updated_at": (datetime.now(timezone.utc) - timedelta(seconds=50)).isoformat()
+            }))
+            pids_file.write_text('{"worker": 12345}')
+            with patch.object(runtime, "STATUS", state_file), patch.object(runtime, "PIDS", pids_file):
+                with patch.object(runtime, "process_active", return_value=True):
+                    out = runtime.snapshot()
+                    self.assertEqual(out["stage"], "stalled")
+
     def test_notebook_parse_and_entrypoint(self):
         nb = json.loads((PATH.parent.parent / "Anime_Studio_Colab.ipynb").read_text())
         self.assertEqual(nb["nbformat"], 4)
         cells = nb["cells"]
-        self.assertEqual(len(cells), 3)
+        self.assertEqual(len(cells), 4)
         self.assertIn("studio.dashboard", "".join(cells[2]["source"]))
         self.assertIn("enable_custom_widget_manager", "".join(cells[2]["source"]))
+        self.assertIn("runtime.recent_log", "".join(cells[3]["source"]))
 
 
 if __name__ == "__main__":
