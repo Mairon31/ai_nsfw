@@ -56,6 +56,10 @@ DEFAULTS = {
 STATE = {"ui_process": None, "tunnel_process": None}
 
 def secret(name: str) -> str:
+    """Read secrets from Colab in the notebook, or the temporary worker environment."""
+    value = (os.environ.get(name) or "").strip()
+    if value:
+        return value
     try:
         return (userdata.get(name) or "").strip()
     except Exception:
@@ -380,7 +384,9 @@ def launch_tunnel(tunnel: str, port: int, email: str) -> str:
             archive.write_bytes(response.content)
             run(["tar", "-xzf", str(archive), "-C", str(ROOT)])
             executable.chmod(0o755)
-        run([str(executable), "config", "add-authtoken", token])
+        # ngrok reads NGROK_AUTHTOKEN from the temporary worker environment;
+        # do not save this credential to a persistent config file.
+        os.environ["NGROK_AUTHTOKEN"] = token
         policy = LOCAL_ROOT / "ngrok-policy.json"
         policy.write_text(json.dumps({"on_http_request": [
             {"actions": [{"type": "oauth", "config": {"provider": "google"}}]},
