@@ -33,3 +33,8 @@ jobs:
           "$PY" -m pip install 'setuptools==69.5.1' wheel ftfy regex tqdm
           "$PY" -m pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip
           "$PY" -c 'import pkg_resources,importlib.metadata as m; assert m.version("clip") == "1.0"; print("CLIP installed:", m.version("clip"))'
+      - name: Reproduce Colab MPLBACKEND error and validate Agg in Python 3.10
+        run: |
+          PY=/tmp/anime-studio-a1111-smoke/bin/python
+          "$PY" -m pip install 'matplotlib==3.9.4'
+          MPLBACKEND=Agg "$PY" -c 'import matplotlib; assert matplotlib.get_backend().lower() == "agg"; print("Matplotlib backend:", matplotlib.get_backend())'
