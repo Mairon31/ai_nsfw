@@ -15,9 +15,11 @@ from pathlib import Path
 # When executed as a file, make package imports possible.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from studio import launcher
+# Write the very first log line before importing any optional AI/Colab code.
+print("[BOOT] Proceso Python iniciado; importando componentes mínimos...", flush=True)
 from studio.runtime import CONFIG, LOG, STATUS, read_json, save_pid, stage, RUNTIME
 
+launcher = None
 CURRENT = {"label": "Iniciando", "busy": True}
 SHUTDOWN = threading.Event()
 
@@ -46,6 +48,11 @@ def validate_config(cfg):
 
 
 def start():
+    global launcher
+    progress("bootstrap", "Worker activo. Cargando componentes ligeros...")
+    from studio import launcher as backend
+    launcher = backend
+    progress("bootstrap", "Componentes cargados; leyendo preferencias...")
     cfg = read_json(CONFIG)
     validate_config(cfg)
     output = RUNTIME
@@ -125,10 +132,11 @@ if __name__ == "__main__":
     except Exception as exc:
         print("\n" + traceback.format_exc(), flush=True)
         stage("error", f"{type(exc).__name__}: {exc}. Consulta el registro completo.")
-        for key in ("tunnel_process", "ui_process"):
-            proc = launcher.STATE.get(key)
-            if proc and proc.poll() is None:
-                proc.terminate()
+        if launcher is not None:
+            for key in ("tunnel_process", "ui_process"):
+                proc = launcher.STATE.get(key)
+                if proc and proc.poll() is None:
+                    proc.terminate()
     finally:
         CURRENT["busy"] = False
         SHUTDOWN.set()
