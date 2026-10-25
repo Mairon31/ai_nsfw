@@ -96,7 +96,7 @@ def process_active() -> bool:
     pids = read_json(PIDS)
     return any(pid_alive(int(pids.get(k, 0)), markers=v) for k, v in (
         ("worker", ("studio/worker.py", "studio.worker")),
-        ("server", ("ComfyUI/main.py", "main.py", "launch.py", "webui.py")),
+        ("server", ("ComfyUI/main.py", "main.py", "launch.py", "webui.py", "wgp.py")),
         ("proxy", ("access_proxy.py",)),
         ("tunnel", ("cloudflared", "ngrok")),
     ))
@@ -108,7 +108,7 @@ def stop_session() -> None:
     targets = [
         ("tunnel", ("cloudflared", "ngrok")),
         ("proxy", ("access_proxy.py",)),
-        ("server", ("ComfyUI/main.py", "main.py", "launch.py", "webui.py")),
+        ("server", ("ComfyUI/main.py", "main.py", "launch.py", "webui.py", "wgp.py")),
         ("worker", ("studio/worker.py", "studio.worker")),
     ]
     # SIGTERM process groups so child git/pip installs are also interrupted.
@@ -149,7 +149,7 @@ def launch_worker(config: dict, secrets: dict[str, str]) -> int:
     atomic_json(PIDS, {})
     atomic_json(CONFIG, config)
     atomic_json(STATUS, {})
-    for old_log in ("comfyui-server.log", "automatic1111-server.log", "access-proxy.log", "tunnel.log"):
+    for old_log in ("comfyui-server.log", "automatic1111-server.log", "wangp-server.log", "access-proxy.log", "tunnel.log"):
         (RUNTIME / old_log).unlink(missing_ok=True)
     LOG.write_text(f"Anime Colab Studio | sesión iniciada {utc_now()}\n", encoding="utf-8")
     stage("preparing", "Preparando la ejecución...")
@@ -183,7 +183,7 @@ def snapshot() -> dict:
     name = data.get("stage", "idle")
     if name in {"ready", "degraded"}:
         pid = pids.get("server")
-        if not isinstance(pid, int) or not pid_alive(pid, markers=("main.py", "launch.py", "webui.py")):
+        if not isinstance(pid, int) or not pid_alive(pid, markers=("main.py", "launch.py", "webui.py", "wgp.py")):
             data.update(stage="error", message="El servidor terminó. Revisa los logs y pulsa Iniciar para reintentarlo.", percent=0)
             atomic_json(STATUS, data)
     elif name == "preparing" and pids and process_active():
@@ -221,7 +221,7 @@ def recent_log(lines: int = 45) -> str:
     """Show installation progress AND logs from the separate UI/tunnel processes."""
     main = _tail_file(LOG, lines=lines)
     extras = []
-    for name in ("comfyui-server.log", "automatic1111-server.log", "access-proxy.log", "tunnel.log"):
+    for name in ("comfyui-server.log", "automatic1111-server.log", "wangp-server.log", "access-proxy.log", "tunnel.log"):
         location = RUNTIME / name
         if not location.exists():
             continue
@@ -287,8 +287,9 @@ def monitor_active_session(interval: int = 20, *, max_checks: int | None = None,
 
         data = read_json(CONFIG)
         mode = data.get("ui", status.get("ui", "ComfyUI"))
-        port = 7860 if mode == "AUTOMATIC1111" else 8188
-        endpoint = "/sdapi/v1/options" if mode == "AUTOMATIC1111" else "/system_stats"
+        port = {"AUTOMATIC1111": 7860, "ComfyUI": 8188, "WanGP": 7862}.get(mode, 8188)
+        endpoint = {"AUTOMATIC1111": "/sdapi/v1/options",
+                    "ComfyUI": "/system_stats", "WanGP": "/config"}.get(mode, "/system_stats")
 
         api_result = "sin comprobar"
         if check_api:
@@ -371,8 +372,9 @@ async def monitor_active_session_async(
                 if check_api:
                     cfg = read_json(CONFIG)
                     ui = cfg.get("ui", current.get("ui", "ComfyUI"))
-                    port = 7860 if ui == "AUTOMATIC1111" else 8188
-                    endpoint = "/sdapi/v1/options" if ui == "AUTOMATIC1111" else "/system_stats"
+                    port = {"AUTOMATIC1111": 7860, "ComfyUI": 8188, "WanGP": 7862}.get(ui, 8188)
+                    endpoint = {"AUTOMATIC1111": "/sdapi/v1/options",
+                                "ComfyUI": "/system_stats", "WanGP": "/config"}.get(ui, "/system_stats")
                     def probe():
                         try:
                             with urllib.request.urlopen(
@@ -411,7 +413,7 @@ def launch_foreground(config: dict, secrets: dict[str, str]) -> int:
     atomic_json(PIDS, {})
     atomic_json(CONFIG, config)
     atomic_json(STATUS, {})
-    for old_log in ("comfyui-server.log", "automatic1111-server.log", "access-proxy.log", "tunnel.log"):
+    for old_log in ("comfyui-server.log", "automatic1111-server.log", "wangp-server.log", "access-proxy.log", "tunnel.log"):
         (RUNTIME / old_log).unlink(missing_ok=True)
     LOG.write_text(f"Anime Colab Studio | modo directo {utc_now()}\n", encoding="utf-8")
     stage("preparing", "Modo directo: lanzando proceso supervisado en esta celda...")
