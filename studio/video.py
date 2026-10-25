@@ -83,7 +83,28 @@ def ensure_wangp_python() -> Path:
     return py
 
 
-def prepare_wangp(output_root: Path) -> tuple[Path, Path]:
+def connect_storage(local_path: Path, persistent_path: Path) -> None:
+    """Connect WanGP media/model directory to Drive without discarding files."""
+    persistent_path.mkdir(parents=True, exist_ok=True)
+    if local_path.is_symlink():
+        if local_path.resolve() == persistent_path.resolve():
+            return
+        local_path.unlink()
+    elif local_path.exists():
+        if not local_path.is_dir():
+            raise RuntimeError(f"Se esperaba una carpeta para WanGP: {local_path}")
+        # Preserve files of a previous run before installing a symlink.
+        for child in list(local_path.iterdir()):
+            destination = persistent_path / child.name
+            if destination.exists():
+                raise FileExistsError(f"Colisión de archivos; no se borrará: {destination}")
+            shutil.move(str(child), str(destination))
+        local_path.rmdir()
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.symlink_to(persistent_path, target_is_directory=True)
+
+
+def prepare_wangp(output_root: Path, *, cache_models: bool = True) -> tuple[Path, Path]:
     from studio import launcher
     root = launcher.ROOT / "WanGP"
     py = ensure_wangp_python()
@@ -106,6 +127,14 @@ def prepare_wangp(output_root: Path) -> tuple[Path, Path]:
             raise RuntimeError("WanGP no detecta CUDA con PyTorch: " + verify.stderr[-1200:])
         marker.write_text("ready")
     output_root.mkdir(parents=True, exist_ok=True)
+    # Native WanGP uses ckpts/ for downloaded model weights. Keep large
+    # downloads and LoRAs in Drive across ephemeral Colab VMs when requested.
+    if cache_models:
+        base = launcher.DRIVE_ROOT / "video-cache" / "wangp"
+        for name in ("ckpts", "loras", "loras_i2v"):
+            connect_storage(root / name, base / name)
+    for name in ("outputs", "gradio_outputs"):
+        connect_storage(root / name, output_root / name)
     return root, py
 
 
