@@ -48,11 +48,11 @@ WORKFLOW_URL = (
 WAN22_REPO = "Comfy-Org/Wan-2.2"
 WAN22_FILES = (
     ("split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
-     "diffusion_models", 5_000_000_000),
+     "diffusion_models", 9_000_000_000),
     ("split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
-     "text_encoders", 2_000_000_000),
+     "text_encoders", 6_000_000_000),
     ("split_files/vae/wan2.2_vae.safetensors",
-     "vae", 700_000_000),
+     "vae", 1_200_000_000),
 )
 
 
@@ -143,6 +143,13 @@ def prepare_wan22_comfy(app: Path, store: Path, token: str | None = None) -> Pat
     from studio import launcher
     for filename, subfolder, minimum in WAN22_FILES:
         print(f"Wan 2.2: verificando {Path(filename).name}...", flush=True)
+        target = store / subfolder / Path(filename).name
+        # Older runs may have left >1 MB of an interrupted download.
+        # The generic HF cache helper skips such files; discard only the
+        # provably incomplete video checkpoint, never valid stored weights.
+        if target.is_file() and target.stat().st_size < minimum:
+            print("Wan 2.2: detectado archivo incompleto; reanudando desde HF.", flush=True)
+            target.unlink()
         downloaded = launcher.download_hf(WAN22_REPO, filename, store / subfolder, token)
         if downloaded.stat().st_size < minimum:
             raise RuntimeError(f"Modelo de video incompleto: {filename}")
