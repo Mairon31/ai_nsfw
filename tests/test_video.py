@@ -1,5 +1,6 @@
 """Offline tests for Colab video model setup and mobile notebook paths."""
 import json
+import ast
 import subprocess
 import tempfile
 import unittest
@@ -110,4 +111,5 @@ class VideoTests(unittest.TestCase):
                     continue
                 # Parse Python portions only; magic cells are never compiled.
                 if "%pip" not in source:
-                    compile(source, "<mobile-cell>", "exec")
+                    compile(source, "<mobile-cell>", "exec",
+                            flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
