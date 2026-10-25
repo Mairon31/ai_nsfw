@@ -29,7 +29,7 @@ Un entorno de **generación de imágenes y videos con IA** desde Google Colab. S
 2. En **Entorno de ejecución → Cambiar tipo**, activa una **GPU NVIDIA**. La disponibilidad de T4, L4 o A100 depende de Colab.
 3. Ejecuta la **celda 1** (dependencias) y la **celda 2** (descarga la versión más reciente de este repositorio y monta Drive).
 4. Selecciona **Imágenes** o **Videos** y sus opciones.
-5. Elige **Cloudflare** para acceso remoto sin cuenta de ngrok; establece opcionalmente el secreto \`WEBUI_PASSWORD\` desde el icono de llave de Colab.
+5. Elige **Cloudflare** para acceso remoto sin cuenta de ngrok; establece opcionalmente el secreto `WEBUI_PASSWORD` desde el icono de llave de Colab.
 6. Pulsa **Instalar / iniciar** y consulta el avance. Cuando termine, abre la URL HTTPS y usa la contraseña mostrada en el notebook. No hay autenticación repetida por correo.
 7. La **celda 3** ofrece diagnóstico incluso si los widgets no actualizan. La **celda 5** mantiene una celda supervisando la ejecución; la **celda 4** permite un arranque directo alternativo con logs.
 
@@ -40,9 +40,9 @@ El launcher reconoce instalaciones existentes en la sesión y reutiliza los arch
 1. Abre el [notebook para móvil](https://colab.research.google.com/github/Mairon31/ai_nsfw/blob/master/Anime_Studio_Mobile.ipynb) en **Chrome o Safari**, con tu cuenta Google.
 2. Activa GPU en el runtime. Para menús que no aparezcan, utiliza la opción **Solicitar sitio de escritorio** del navegador.
 3. Ejecuta **celda 1** para preparar bibliotecas y montar Drive. Autoriza el acceso solicitado por Google.
-4. En **celda 2**, selecciona el modo, modelo, interfaz, túnel, calidad, LoRA opcional y almacenamiento. Ejecuta la celda. Esta vista utiliza \`# @param\` (formularios de Colab), no \`ipywidgets\`.
+4. En **celda 2**, selecciona el modo, modelo, interfaz, túnel, calidad, LoRA opcional y almacenamiento. Ejecuta la celda. Esta vista utiliza `# @param` (formularios de Colab), no `ipywidgets`.
 5. Ejecuta la **celda 3** y actualízala cuando quieras: muestra progreso, URL, contraseña y últimos logs. Abre la interfaz en otra pestaña.
-6. **Celda 4:** monitor continuo opcional. Mantiene código real en ejecución y comprueba la API. Puedes detener la celda sin detener el motor; para apagar el servidor activa \`DETENER_SERVIDOR\` en la celda 3.
+6. **Celda 4:** monitor continuo opcional. Mantiene código real en ejecución y comprueba la API. Puedes detener la celda sin detener el motor; para apagar el servidor activa `DETENER_SERVIDOR` en la celda 3.
 
 El teléfono no necesita GPU; toda la inferencia sucede en la VM de Colab. No dependas de dejar Safari/Chrome en segundo plano para mantener viva una sesión: iOS/Android pueden suspender las pestañas y Colab tiene límites propios.
 
@@ -62,7 +62,7 @@ El teléfono no necesita GPU; toda la inferencia sucede en la VM de Colab. No de
 - Para **modelos grandes (14B)** considera **L4 o A100**, cuantización y offload, si la VM tiene suficiente RAM. No asumas que un T4 ejecutará todos los presets WanGP.
 - Usa pruebas de **3–5 segundos** (por ejemplo 49–81 frames) antes de pedir clips largos. Una animación final de 30–60 s suele requerir varias tomas y edición o continuación dentro del backend.
 - El selector WanGP del notebook **no instala automáticamente un modelo de decenas de GB**: la aplicación muestra sus variantes y permite escoger según tu GPU.
-- Wan 2.2 TI2V 5B en ComfyUI descarga sus tres componentes la primera vez. En ComfyUI abre **Workflows → AnimeStudio-Wan22-TI2V-5B**. Si guardas en Drive también habrá una copia en \`AnimeColabStudio/workflows/\`.
+- Wan 2.2 TI2V 5B en ComfyUI descarga sus tres componentes la primera vez. En ComfyUI abre **Workflows → AnimeStudio-Wan22-TI2V-5B**. Si guardas en Drive también habrá una copia en `AnimeColabStudio/workflows/`.
 
 **Fuentes de las implementaciones:** [WanGP oficial](https://github.com/DeepBeepMeep/Wan2GP), [Guía CLI WanGP](https://github.com/DeepBeepMeep/Wan2GP/blob/main/docs/CLI.md), [Wan 2.2 Comfy-Org](https://huggingface.co/Comfy-Org/Wan-2.2) y [workflow oficial TI2V 5B](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/video_wan2_2_5B_ti2v.json).
 
@@ -70,7 +70,7 @@ El teléfono no necesita GPU; toda la inferencia sucede en la VM de Colab. No de
 
 Cuando usas las opciones de guardar y caché:
 
-\`\`\`text
+```text
 Mi unidad/
 └── AnimeColabStudio/
     ├── settings.json                 # preferencias no sensibles
@@ -88,34 +88,34 @@ Mi unidad/
     ├── videos/                      # renders, workspaces y ajustes de WanGP
     ├── outputs/                     # PNG de generación de imágenes
     └── workflows/                   # workflows ComfyUI de video
-\`\`\`
+```
 
 Los paquetes Python, clones y túneles están en la VM temporal de Colab y pueden requerir instalación tras un reinicio. Los archivos guardados realmente en Drive sobreviven. **El caché de video puede ocupar decenas de GB**; revisa tu cuota de Drive antes de instalar modelos grandes.
 
 ## Seguridad y acceso remoto
 
-El launcher mantiene el motor escuchando en \`127.0.0.1\`, publica **solo un proxy de acceso**, y usa cookies seguras para HTTP y WebSocket. No utiliza \`--allowed-mail\` ni solicita códigos repetidos por correo. Puedes poner \`WEBUI_PASSWORD\` en Secretos de Colab; sin ello, genera una contraseña nueva por sesión y la muestra en el notebook.
+El launcher mantiene el motor escuchando en `127.0.0.1`, publica **solo un proxy de acceso**, y usa cookies seguras para HTTP y WebSocket. No utiliza `--allowed-mail` ni solicita códigos repetidos por correo. Puedes poner `WEBUI_PASSWORD` en Secretos de Colab; sin ello, genera una contraseña nueva por sesión y la muestra en el notebook.
 
-Secretos opcionales (icono de llave): \`HF_TOKEN\` para repositorios privados o con permisos, \`NGROK_AUTHTOKEN\` para ngrok, \`WEBUI_PASSWORD\` para controlar el acceso. No se guardan esos valores en GitHub ni en \`settings.json\`. No compartas el notebook con las salidas visibles cuando tengan URL y contraseña, ni publiques la URL del túnel.
+Secretos opcionales (icono de llave): `HF_TOKEN` para repositorios privados o con permisos, `NGROK_AUTHTOKEN` para ngrok, `WEBUI_PASSWORD` para controlar el acceso. No se guardan esos valores en GitHub ni en `settings.json`. No compartas el notebook con las salidas visibles cuando tengan URL y contraseña, ni publiques la URL del túnel.
 
 ## Diagnóstico y recuperación
 
-- **Estado y logs:** celda 3; archivos en \`/content/AnimeColabStudio/runtime.log\` y \`*-server.log\`. La versión móvil permite verlos sin widgets.
+- **Estado y logs:** celda 3; archivos en `/content/AnimeColabStudio/runtime.log` y `*-server.log`. La versión móvil permite verlos sin widgets.
 - **Celda completada:** es normal para la celda 2; el servidor corre como proceso supervisado. Puedes usar la celda de monitor para mostrar ejecución activa.
-- **Error al arrancar A1111:** se usa Python 3.10 aislado, workaround \`setuptools\`/CLIP y mirror de Stable Diffusion. No modifiques globalmente Python 3.13 del notebook.
+- **Error al arrancar A1111:** se usa Python 3.10 aislado, workaround `setuptools`/CLIP y mirror de Stable Diffusion. No modifiques globalmente Python 3.13 del notebook.
 - **Conflictos CUDA/VRAM:** empieza con un modelo más ligero, menos frames, 480p, batch 1, perfil de memoria 4 (WanGP); comprueba la GPU disponible en Colab.
 - **Espacio insuficiente:** elimina solo cachés prescindibles de la VM o checkpoints que no utilices. No borres carpetas de Drive sin revisar su contenido.
-- **Interfaz no abre:** comprueba \`ready\` y verificación externa en diagnóstico; si el túnel caduca, detén, actualiza e inicia otra sesión. Los enlaces son temporales.
+- **Interfaz no abre:** comprueba `ready` y verificación externa en diagnóstico; si el túnel caduca, detén, actualiza e inicia otra sesión. Los enlaces son temporales.
 - **Sin respuesta después de una actualización:** vuelve a ejecutar la celda 2 (o 1 en móvil) para traer la última versión del repositorio.
 - **Colab se apaga:** el servicio impone una vida máxima de VM, límites de saldo y posible desconexión por inactividad. **Ningún monitor o técnica de mantener la celda abierta los elimina**. Consulta las [FAQ de Colab](https://research.google.com/colaboratory/faq.html).
 
 ## Desarrollo y pruebas
 
-\`\`\`bash
+```bash
 python -m pip install ipywidgets huggingface_hub requests 'aiohttp>=3.10,<4'
 python -m compileall -q studio tests
 python -m unittest discover -s tests -v
-\`\`\`
+```
 
 GitHub Actions valida el código y algunas dependencias externas, pero no genera MP4 ni PNG en una GPU real. Los cambios están pensados para no romper los modos existentes de imágenes. No distribuyas contenidos que vulneren derechos de terceros ni el reglamento del proveedor de cómputo.
 
