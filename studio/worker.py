@@ -63,7 +63,7 @@ def start_video(cfg):
     output.mkdir(parents=True, exist_ok=True)
     progress("installing", f"Preparando motor de video {backend}; esto puede instalar PyTorch adicional.")
     if backend == "WanGP":
-        app, py = video.prepare_wangp(output)
+        app, py = video.prepare_wangp(output, cache_models=cfg.get("cache_models", True))
         print("WanGP: selecciona el modelo de la familia elegida dentro de la Web UI.", flush=True)
         print("WanGP: los pesos se descargan bajo demanda al generar; empieza con clips cortos.", flush=True)
     else:
