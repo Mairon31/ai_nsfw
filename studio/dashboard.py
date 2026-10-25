@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import ipywidgets as widgets
 from IPython.display import display
 
-from studio import launcher, runtime
+from studio import launcher, runtime, video
 
 
 def make_dashboard():
@@ -22,13 +22,26 @@ def make_dashboard():
         "<p>Selecciona el modelo, interfaz, túnel y LoRAs. "
         "La instalación se ejecuta aparte y puedes detenerla o reiniciarla.</p>")
     layout = widgets.Layout(width="98%")
-    desc = {"description_width": "112px"}
-    model = widgets.Dropdown(options=list(launcher.MODELS), value=values["model"],
+    desc = {"description_width": "105px"}
+    mode = widgets.Dropdown(options=[("Imágenes", "image"), ("Videos", "video")],
+                            value=values.get("mode", "image"),
+                            description="Modo", layout=layout, style=desc)
+    model = widgets.Dropdown(options=list(launcher.MODELS),
+                             value=values["model"] if values["model"] in launcher.MODELS
+                             else next(iter(launcher.MODELS)),
                              description="Modelo", layout=layout, style=desc)
-    interface = widgets.ToggleButtons(options=["ComfyUI", "AUTOMATIC1111"],
-                                      value=values["ui"], description="Interfaz")
-    tunnel = widgets.ToggleButtons(options=["Cloudflare", "ngrok", "Local only"],
-                                   value=values["tunnel"], description="Túnel")
+    interface = widgets.Dropdown(options=["ComfyUI", "AUTOMATIC1111"],
+                                 value=values["ui"], description="Interfaz",
+                                 layout=layout, style=desc)
+    video_preset = widgets.Dropdown(options=list(video.VIDEO_PRESETS),
+                                   value=values.get("video_preset") if
+                                   values.get("video_preset") in video.VIDEO_PRESETS
+                                   else next(iter(video.VIDEO_PRESETS)),
+                                   description="Video IA", layout=layout, style=desc)
+    video_note = widgets.HTML()
+    tunnel = widgets.Dropdown(options=["Cloudflare", "ngrok", "Local only"],
+                              value=values["tunnel"], description="Túnel",
+                              layout=layout, style=desc)
     authentication = widgets.HTML(
         "<small><b>Acceso remoto:</b> sin códigos de correo. El notebook mostrará "
         "la contraseña de sesión al completar el inicio, o puedes configurar "
@@ -37,11 +50,11 @@ def make_dashboard():
                                value=values["profile"], description="Calidad", style=desc)
     save_images = widgets.Checkbox(
         value=values["save_to_drive"],
-        description="Guardar imágenes PNG automáticamente en Google Drive",
+        description="Guardar imágenes/videos en Google Drive",
         indent=False)
     cache = widgets.Checkbox(
         value=values["cache_models"],
-        description="Conservar modelos y LoRAs en Google Drive para próximos inicios",
+        description="Conservar checkpoints descargados en Google Drive",
         indent=False)
     detail = widgets.Checkbox(
         value=values.get("adetailer", False),
@@ -68,6 +81,30 @@ def make_dashboard():
     model_changed()
     choices.value = tuple(name for name in values["loras"] if name in choices.options)
 
+    image_controls = widgets.VBox([
+        model, interface, quality, detail, compatible_note,
+        widgets.HTML("<b>LoRAs de imágenes</b>"), choices,
+        widgets.HTML("<b>LoRAs personalizados (uno por línea)</b>"), custom,
+    ], layout=layout)
+    video_controls = widgets.VBox([video_preset, video_note], layout=layout)
+
+    def video_changed(*_):
+        selected = video.info(video_preset.value)
+        video_note.value = (
+            "<small><b>Motor:</b> " + html.escape(selected["backend"]) +
+            " · <b>VRAM orientativa:</b> " + str(selected["recommended_vram"]) +
+            " GB. " + html.escape(selected["description"]) +
+            "<p>WanGP descarga el modelo que elijas en su propia interfaz. "
+            "Los LoRAs de imágenes SDXL no se mezclarán con los de video.</p></small>")
+    video_preset.observe(video_changed, names="value")
+    video_changed()
+
+    def mode_changed(*_):
+        image_controls.layout.display = "none" if mode.value == "video" else ""
+        video_controls.layout.display = "" if mode.value == "video" else "none"
+    mode.observe(mode_changed, names="value")
+    mode_changed()
+
     progress = widgets.IntProgress(
         value=0, min=0, max=100, description="Progreso",
         layout=widgets.Layout(width="98%"))
@@ -87,6 +124,7 @@ def make_dashboard():
 
     def get_config():
         return {
+            "mode": mode.value, "video_preset": video_preset.value,
             "model": model.value, "ui": interface.value, "tunnel": tunnel.value,
             "allowed_email": "", "profile": quality.value,
             "save_to_drive": bool(save_images.value),
@@ -166,11 +204,11 @@ def make_dashboard():
     refresh_btn.on_click(refresh_click)
 
     root = widgets.VBox([
-        title, model, interface, tunnel, authentication, quality, save_images, cache, detail,
-        widgets.HTML("<b>LoRAs opcionales</b>"), choices,
-        widgets.HTML("<b>LoRAs personalizados (uno por línea)</b>"),
-        custom, compatible_note,
-        widgets.HBox([save_btn, start_btn, stop_btn, refresh_btn]),
+        title, mode, image_controls, video_controls, tunnel,
+        authentication, save_images, cache,
+        widgets.VBox([widgets.HBox([start_btn, stop_btn]),
+                      widgets.HBox([save_btn, refresh_btn])],
+                     layout=widgets.Layout(width="98%")),
         status, progress, refresh_info, last, logs, help_text,
     ])
     previous = getattr(builtins, "_anime_studio_dashboard", None)
