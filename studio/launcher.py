@@ -16,7 +16,7 @@ import requests
 # Deliberately lazy-load Colab/IPython/Hugging Face modules.
 # Importing notebook modules inside a detached worker can block at startup.
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 ROOT = Path("/content")
 DRIVE_MOUNT = ROOT / "drive"
 DRIVE_ROOT = DRIVE_MOUNT / "MyDrive" / "AnimeColabStudio"
@@ -39,6 +39,8 @@ LORAS = {
     "Sensual Face v2 Type 2 (Pony)": ("JujoHotaru/lora", "sdxl/sensualface2_xl_v20.safetensors", ("pony",), 0.7),
 }
 DEFAULTS = {
+    "mode": "image",
+    "video_preset": "Wan 2.2 TI2V 5B · ComfyUI",
     "model": "NoobAI-XL 1.0",
     "ui": "ComfyUI",
     "tunnel": "Cloudflare",
@@ -90,7 +92,7 @@ def load_settings() -> dict:
 
 def save_settings(config: dict) -> None:
     SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    safe_config = {key: config[key] for key in DEFAULTS}
+    safe_config = {key: config.get(key, default) for key, default in DEFAULTS.items()}
     temp = SETTINGS.with_suffix(".tmp")
     temp.write_text(json.dumps(safe_config, indent=2, ensure_ascii=False), encoding="utf-8")
     temp.replace(SETTINGS)
@@ -478,7 +480,11 @@ def launch_ui(app: Path, config: dict, output_root: Path) -> tuple[int, Path]:
 
 def wait_for_http(port: int, proc: subprocess.Popen, log: Path, timeout: int = 600, ui_name: str = "ComfyUI") -> None:
     """Wait for the engine's API, not just Gradio's early HTML shell."""
-    endpoint = "/sdapi/v1/options" if ui_name == "AUTOMATIC1111" else "/system_stats"
+    endpoints = {"AUTOMATIC1111": "/sdapi/v1/options", "ComfyUI": "/system_stats",
+                 "WanGP": "/config"}
+    if ui_name not in endpoints:
+        raise ValueError("Interfaz desconocida para comprobar su API.")
+    endpoint = endpoints[ui_name]
     for _ in range(timeout // 3):
         if proc.poll() is not None:
             raise RuntimeError(f"Web UI terminó antes de iniciar. Últimas líneas:\n{tail(log)}")
@@ -646,7 +652,12 @@ def verify_tunnel_public_url(url: str, password: str, retries: int = 10, ui_name
                 if authenticated.status_code != 200 or "text/html" not in authenticated.headers.get("Content-Type", ""):
                     time.sleep(3)
                     continue
-                api_path = "/sdapi/v1/options" if ui_name == "AUTOMATIC1111" else "/system_stats"
+                api_path = {
+                    "AUTOMATIC1111": "/sdapi/v1/options",
+                    "ComfyUI": "/system_stats", "WanGP": "/config",
+                }.get(ui_name)
+                if not api_path:
+                    return False
                 api = client.get(url + api_path, timeout=12)
                 if api.status_code == 200 and isinstance(api.json(), dict):
                     return True
